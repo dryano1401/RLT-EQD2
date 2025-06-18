@@ -8,15 +8,30 @@ import math
 
 # Organ-specific parameters database (alphabetically ordered)
 ORGAN_PARAMETERS = {
-    "Bladder": {
-        "alpha_beta": 5.0,
-        "repair_half_time": 1.5,
-        "description": "Bladder wall"
+    "Kidneys": {
+        "alpha_beta": 2.6,
+        "repair_half_time": 2.5,
+        "description": "Renal cortex/medulla"
     },
     "Bone Marrow": {
         "alpha_beta": 10.0,
         "repair_half_time": 0.5,
         "description": "Hematopoietic tissue"
+    },
+    "Liver": {
+        "alpha_beta": 2.5,
+        "repair_half_time": 1.5,
+        "description": "Hepatocytes"
+    },
+    "Spleen": {
+        "alpha_beta": 3.0,
+        "repair_half_time": 1.0,
+        "description": "Lymphoid tissue/immune organ"
+    },
+    "Bladder": {
+        "alpha_beta": 5.0,
+        "repair_half_time": 1.5,
+        "description": "Bladder wall"
     },
     "Breast": {
         "alpha_beta": 4.0,
@@ -28,20 +43,10 @@ ORGAN_PARAMETERS = {
         "repair_half_time": 2.0,
         "description": "Myocardium"
     },
-    "Kidneys": {
-        "alpha_beta": 2.6,
-        "repair_half_time": 2.5,
-        "description": "Renal cortex/medulla"
-    },
     "Lacrimal Glands": {
         "alpha_beta": 3.0,
         "repair_half_time": 1.0,
         "description": "Tear-producing glands"
-    },
-    "Liver": {
-        "alpha_beta": 2.5,
-        "repair_half_time": 1.5,
-        "description": "Hepatocytes"
     },
     "Lungs": {
         "alpha_beta": 3.0,
@@ -62,11 +67,6 @@ ORGAN_PARAMETERS = {
         "alpha_beta": 2.0,
         "repair_half_time": 1.5,
         "description": "Neural tissue"
-    },
-    "Spleen": {
-        "alpha_beta": 3.0,
-        "repair_half_time": 1.0,
-        "description": "Lymphoid tissue/immune organ"
     },
     "Thyroid": {
         "alpha_beta": 10.0,
