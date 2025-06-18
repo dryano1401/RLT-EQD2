@@ -105,6 +105,15 @@ def calculate_eqd2(bed, alpha_beta):
     eqd2 = bed / (1 + 2 / alpha_beta)
     return eqd2
 
+def calculate_equivalent_fractions(bed, alpha_beta):
+    """
+    Calculate how many 2 Gy fractions would give equivalent BED
+    """
+    # BED for 2 Gy fraction: BED_2Gy = 2 × (1 + 2/(α/β))
+    bed_per_2gy_fraction = 2 * (1 + 2 / alpha_beta)
+    equivalent_fractions = bed / bed_per_2gy_fraction
+    return equivalent_fractions
+
 def calculate_time_for_99_percent_delivery(effective_half_life):
     """
     Calculate time required for 99% of dose delivery
@@ -128,11 +137,10 @@ def calculate_eqd299(dose, alpha_beta, effective_half_life, repair_half_time):
     dose_99 = dose * 0.99
     
     # Calculate BED for 99% of the dose
-    # Use modified G-factor for the partial delivery time
-    # For partial delivery, we need to account for the actual delivery pattern
+    # Use G-factor for the delivery pattern
     g_factor_99 = calculate_g_factor_simplified(effective_half_life, repair_half_time)
     
-    # BED calculation for the 99% delivery considers the dose rate pattern up to that point
+    # BED calculation for the 99% delivery
     bed_99 = dose_99 * (1 + g_factor_99 * dose_99 / alpha_beta)
     
     # Convert to EQD2
@@ -140,51 +148,26 @@ def calculate_eqd299(dose, alpha_beta, effective_half_life, repair_half_time):
     
     return eqd299, time_99, dose_99
 
-def calculate_eqd2max(dose, alpha_beta, effective_half_life, repair_half_time):
+def calculate_delivery_efficiency(dose, effective_half_life):
     """
-    Calculate EQD2Max - EQD2 calculated as if the initial dose rate 
-    continued through infinity to contribute to the total absorbed dose
-    
-    For exponential decay: dose_rate(t) = dose_rate_0 * exp(-λt)
-    Initial dose rate: dose_rate_0 = D_total * λ_eff
-    
-    If this initial rate continued forever at constant rate:
-    Total dose would be infinite, but we calculate the equivalent
-    biological effect using the initial rate as if it were sustained.
-    
-    For sustained constant dose rate: BED = D × (1 + (2R)/(α/β × μ))
-    where R is the dose rate and μ is the repair constant
+    Calculate delivery efficiency at different time points
     """
-    # Calculate effective decay constant
-    lambda_eff = 0.693 / effective_half_life  # h^-1
-    mu_repair = 0.693 / repair_half_time       # h^-1
+    lambda_eff = 0.693 / effective_half_life
     
-    # Initial dose rate (Gy/h)
-    initial_dose_rate = dose * lambda_eff
+    # Calculate dose delivered at key time points
+    timepoints = [6, 12, 24, 48, 72, 168]  # hours (6h, 12h, 1d, 2d, 3d, 1week)
+    efficiency = {}
     
-    # For a sustained constant dose rate, the BED formula is:
-    # BED = D × (1 + (2R)/(α/β × μ))
-    # But since we're asking "what if this rate continued forever"
-    # We need to use the actual total dose but with the initial rate characteristics
+    for t in timepoints:
+        fraction_delivered = 1 - np.exp(-lambda_eff * t)
+        dose_delivered = dose * fraction_delivered
+        efficiency[f"{t}h"] = {
+            'fraction': fraction_delivered,
+            'dose': dose_delivered,
+            'percentage': fraction_delivered * 100
+        }
     
-    # Calculate BED as if the total dose was delivered at the constant initial rate
-    # This uses the sustained dose rate BED formula
-    bed_max = dose * (1 + (2 * initial_dose_rate) / (alpha_beta * mu_repair))
-    
-    # Convert to EQD2
-    eqd2max = calculate_eqd2(bed_max, alpha_beta)
-    
-    return eqd2max, initial_dose_rate, dose
-
-def calculate_eqd2r(bed_target, bed_previous, alpha_beta):
-    """
-    Calculate EQD2R (Remaining dose after previous treatment)
-    EQD2R = EQD2_total - EQD2_previous
-    """
-    eqd2_target = calculate_eqd2(bed_target, alpha_beta)
-    eqd2_previous = calculate_eqd2(bed_previous, alpha_beta)
-    eqd2r = eqd2_target - eqd2_previous
-    return eqd2r
+    return efficiency
 
 def calculate_dose_rate_factor(effective_half_life, repair_half_time):
     """
@@ -198,15 +181,35 @@ def calculate_dose_rate_factor(effective_half_life, repair_half_time):
     drf = lambda_eff / (lambda_eff + mu_repair)
     return drf
 
+def get_organ_bed_tolerance(selected_organ, alpha_beta, kidney_risk_high=False):
+    """
+    Get organ BED tolerance limit based on organ type and risk factors
+    """
+    if selected_organ == "Kidneys":
+        if kidney_risk_high:
+            return 28.0  # High risk BED limit
+        else:
+            return 40.0  # Low risk BED limit
+    else:
+        # Convert EQD2 tolerance limits to BED limits for other organs
+        organ_eqd2_limits = {
+            "Bone Marrow": 2.0, "Liver": 30.0, "Lungs": 20.0,
+            "Heart": 26.0, "Spinal Cord": 50.0, "Salivary Glands": 26.0, "Thyroid": 45.0,
+            "Lacrimal Glands": 30.0, "Bladder": 65.0, "Prostate": 76.0, "Breast": 50.0
+        }
+        eqd2_limit = organ_eqd2_limits.get(selected_organ, 25.0)
+        # Convert EQD2 limit to BED limit: BED = EQD2 × (1 + 2/(α/β))
+        return eqd2_limit * (1 + 2 / alpha_beta)
+
 def main():
     st.set_page_config(
-        page_title="Enhanced Radiopharmaceutical Dosimetry",
+        page_title="Radiopharmaceutical Dosimetry Calculator",
         page_icon="⚛️",
         layout="wide"
     )
     
-    st.title("⚛️ Enhanced Radiopharmaceutical Dosimetry Calculator")
-    st.markdown("Advanced calculator for EQD2, EQD2₉₉, EQD2Max, and EQD2R in radiopharmaceutical therapy")
+    st.title("⚛️ Radiopharmaceutical Dosimetry Calculator")
+    st.markdown("Clinical calculator for BED, EQD2, and delivery analysis in radiopharmaceutical therapy")
     
     # Sidebar for organ selection
     st.sidebar.header("🎯 Organ Selection")
@@ -231,11 +234,10 @@ def main():
         st.sidebar.write(f"Repair t₁/₂: {repair_half_time} h")
     
     # Main tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "🧮 Primary Calculation", 
-        "📊 Advanced Metrics", 
+        "📊 Advanced Assessment", 
         "🔄 Treatment Planning", 
-        "📈 Dose-Response Analysis",
         "⚖️ Safety Assessment"
     ])
     
@@ -273,6 +275,9 @@ def main():
                 # Calculate EQD2
                 eqd2 = calculate_eqd2(bed, alpha_beta)
                 
+                # Calculate equivalent fractions
+                equiv_fractions = calculate_equivalent_fractions(bed, alpha_beta)
+                
                 # Calculate dose rate factor
                 drf = calculate_dose_rate_factor(organ_effective_half_life, repair_half_time)
                 
@@ -281,6 +286,7 @@ def main():
                     'organ_dose': organ_dose,
                     'bed': bed,
                     'eqd2': eqd2,
+                    'equivalent_fractions': equiv_fractions,
                     'g_factor': g_factor,
                     'drf': drf,
                     'organ': selected_organ,
@@ -302,10 +308,11 @@ def main():
                 
                 with col2b:
                     st.metric("EQD2", f"{results['eqd2']:.2f} Gy", help="Equivalent Dose in 2 Gy fractions")
-                    st.metric("G-factor", f"{results['g_factor']:.4f}", help="Repair correction factor")
+                    st.metric("Equivalent Fractions", f"{results['equivalent_fractions']:.1f}", help="Number of 2 Gy fractions with same BED")
                 
                 # Additional parameters
                 st.write("**Dosimetric Parameters:**")
+                st.write(f"• G-factor: {results['g_factor']:.4f}")
                 st.write(f"• Dose Rate Factor: {results['drf']:.3f}")
                 st.write(f"• Effective Half-life: {results['effective_half_life']:.1f} hours")
                 st.write(f"• Repair Half-time: {results['repair_half_time']:.1f} hours")
@@ -314,11 +321,9 @@ def main():
                 lambda_eff = 0.693 / results['effective_half_life']
                 mu_repair = 0.693 / results['repair_half_time']
                 st.info(f"**G-factor Formula:** G = λ_eff/(λ_eff + μ_repair) = {lambda_eff:.4f}/({lambda_eff:.4f} + {mu_repair:.4f}) = {results['g_factor']:.4f}")
-                st.write(f"Where: λ_eff = ln(2)/T_eff = 0.693/{results['effective_half_life']:.1f} = {lambda_eff:.4f} h⁻¹")
-                st.write(f"μ_repair = ln(2)/T_repair = 0.693/{results['repair_half_time']:.1f} = {mu_repair:.4f} h⁻¹")
     
     with tab2:
-        st.header("Advanced Dosimetric Metrics")
+        st.header("Advanced Dosimetric Assessment")
         
         if 'primary_results' in st.session_state:
             results = st.session_state.primary_results
@@ -326,87 +331,90 @@ def main():
             # Calculate advanced metrics
             eqd299, time_99, dose_99 = calculate_eqd299(results['organ_dose'], results['alpha_beta'], 
                                                        results['effective_half_life'], results['repair_half_time'])
-            eqd2max, initial_dose_rate, total_dose_used = calculate_eqd2max(results['organ_dose'], results['alpha_beta'], 
-                                                                           results['effective_half_life'], results['repair_half_time'])
             
-            col1, col2, col3 = st.columns(3)
+            # Calculate delivery efficiency
+            delivery_eff = calculate_delivery_efficiency(results['organ_dose'], results['effective_half_life'])
+            
+            col1, col2 = st.columns(2)
             
             with col1:
-                st.metric(
-                    "EQD2₉₉", 
-                    f"{eqd299:.2f} Gy",
-                    help="EQD2 when 99% of dose has been delivered"
-                )
+                st.subheader("Temporal Delivery Metrics")
                 
-                st.write(f"**Delivery Details:**")
-                st.write(f"• Time to 99%: {time_99:.1f} hours")
+                st.metric("EQD2₉₉", f"{eqd299:.2f} Gy", help="EQD2 when 99% of dose has been delivered")
+                
+                st.write("**Key Timepoints:**")
+                st.write(f"• Time to 99%: {time_99:.1f} hours ({time_99/24:.1f} days)")
                 st.write(f"• Dose at 99%: {dose_99:.2f} Gy")
                 
-                # Show temporal progression
-                days_99 = time_99 / 24
-                st.info(f"99% delivery in {days_99:.1f} days")
+                # Temporal progression comparison
+                temporal_ratio = results['eqd2'] / eqd299
+                st.write(f"• Current/99% ratio: {temporal_ratio:.3f}")
+                
+                if abs(temporal_ratio - 1.0) < 0.01:
+                    st.success("✅ Nearly complete delivery effect")
+                elif temporal_ratio < 0.99:
+                    remaining_effect = (1 - temporal_ratio) * 100
+                    st.info(f"ℹ️ {remaining_effect:.1f}% of biological effect still developing")
             
             with col2:
-                st.metric(
-                    "EQD2Max", 
-                    f"{eqd2max:.2f} Gy",
-                    help="EQD2 if initial dose rate continued forever"
-                )
+                st.subheader("Delivery Efficiency Analysis")
                 
-                st.write(f"**Dose Rate Details:**")
-                st.write(f"• Initial rate: {initial_dose_rate:.4f} Gy/h")
-                st.write(f"• Total dose: {total_dose_used:.2f} Gy")
-                st.write(f"• Rate assumption: Constant")
+                # Create efficiency table
+                eff_data = []
+                for timepoint, data in delivery_eff.items():
+                    eff_data.append({
+                        'Timepoint': timepoint,
+                        'Dose Delivered (Gy)': f"{data['dose']:.2f}",
+                        'Percentage': f"{data['percentage']:.1f}%"
+                    })
                 
-                # Rate comparison
-                rate_ratio = results['eqd2'] / eqd2max
-                if rate_ratio <= 0.3:
-                    st.success(f"✅ Major rate reduction benefit ({rate_ratio:.2f})")
-                elif rate_ratio <= 0.6:
-                    st.info(f"ℹ️ Significant rate reduction benefit ({rate_ratio:.2f})")
-                elif rate_ratio <= 0.8:
-                    st.warning(f"⚠️ Moderate rate reduction benefit ({rate_ratio:.2f})")
+                eff_df = pd.DataFrame(eff_data)
+                st.dataframe(eff_df, use_container_width=True)
+                
+                # Quick insights
+                dose_24h = delivery_eff['24h']['percentage']
+                dose_48h = delivery_eff['48h']['percentage']
+                dose_week = delivery_eff['168h']['percentage']
+                
+                st.write("**Delivery Insights:**")
+                st.write(f"• 24h delivery: {dose_24h:.1f}%")
+                st.write(f"• 48h delivery: {dose_48h:.1f}%")
+                st.write(f"• 1 week delivery: {dose_week:.1f}%")
+                
+                if dose_24h > 50:
+                    st.success("✅ Rapid early delivery")
+                elif dose_24h > 25:
+                    st.info("ℹ️ Moderate early delivery")
                 else:
-                    st.error(f"❌ Limited rate reduction benefit ({rate_ratio:.2f})")
+                    st.warning("⚠️ Slow early delivery")
             
-            with col3:
-                # Calculate dose rate benefit
-                dose_rate_benefit = eqd2max - results['eqd2']
-                st.metric(
-                    "Dose Rate Benefit", 
-                    f"{dose_rate_benefit:.2f} Gy",
-                    help="EQD2 reduction due to exponential vs constant rate delivery"
-                )
-                
-                if dose_rate_benefit > 0:
-                    st.info(f"Exponential decay advantage")
-                else:
-                    st.warning(f"No dose rate advantage")
-            
-            # Temporal delivery analysis
-            st.subheader("Temporal Delivery Analysis")
+            # Temporal delivery visualization
+            st.subheader("Temporal Delivery Visualization")
             
             # Calculate dose delivery over time
-            time_points = np.linspace(0, time_99 * 1.2, 100)  # Extended beyond 99%
+            time_points = np.linspace(0, time_99 * 1.2, 100)
             delivered_fraction = 1 - np.exp(-np.log(2) * time_points / results['effective_half_life'])
             delivered_dose = delivered_fraction * results['organ_dose']
             
-            # Calculate corresponding EQD2 values over time
+            # Calculate corresponding BED and EQD2 values over time
+            bed_time = []
             eqd2_time = []
             for dose_t in delivered_dose:
                 if dose_t > 0:
                     bed_t, _ = calculate_bed_radiopharm(dose_t, results['alpha_beta'], 
                                                      results['effective_half_life'], results['repair_half_time'])
                     eqd2_t = calculate_eqd2(bed_t, results['alpha_beta'])
+                    bed_time.append(bed_t)
                     eqd2_time.append(eqd2_t)
                 else:
+                    bed_time.append(0)
                     eqd2_time.append(0)
             
             # Create temporal plot
             fig = make_subplots(
-                rows=1, cols=2,
-                subplot_titles=('Cumulative Dose Delivery', 'Cumulative EQD2'),
-                specs=[[{"secondary_y": False}, {"secondary_y": False}]]
+                rows=1, cols=3,
+                subplot_titles=('Cumulative Dose Delivery', 'Cumulative BED', 'Cumulative EQD2'),
+                specs=[[{"secondary_y": False}, {"secondary_y": False}, {"secondary_y": False}]]
             )
             
             # Dose delivery plot
@@ -414,44 +422,50 @@ def main():
                 go.Scatter(x=time_points, y=delivered_dose, mode='lines', name='Delivered Dose', line=dict(color='blue')),
                 row=1, col=1
             )
-            fig.add_vline(x=time_99, line_dash="dash", line_color="red", annotation_text="99% delivery")
-            fig.add_vline(x=24, line_dash="dash", line_color="green", annotation_text="24h")
+            
+            # BED plot
+            fig.add_trace(
+                go.Scatter(x=time_points, y=bed_time, mode='lines', name='BED', line=dict(color='red')),
+                row=1, col=2
+            )
             
             # EQD2 plot
             fig.add_trace(
                 go.Scatter(x=time_points, y=eqd2_time, mode='lines', name='EQD2', line=dict(color='green')),
-                row=1, col=2
+                row=1, col=3
             )
-            fig.add_vline(x=time_99, line_dash="dash", line_color="red", annotation_text="99% delivery")
-            fig.add_vline(x=24, line_dash="dash", line_color="green", annotation_text="24h")
+            
+            # Add key timepoints
+            for col in [1, 2, 3]:
+                fig.add_vline(x=24, line_dash="dash", line_color="orange", annotation_text="24h", row=1, col=col)
+                fig.add_vline(x=time_99, line_dash="dash", line_color="red", annotation_text="99%", row=1, col=col)
             
             fig.update_xaxes(title_text="Time (hours)")
             fig.update_yaxes(title_text="Dose (Gy)", row=1, col=1)
-            fig.update_yaxes(title_text="EQD2 (Gy)", row=1, col=2)
-            fig.update_layout(height=400, title_text="Temporal Dose Delivery Analysis")
+            fig.update_yaxes(title_text="BED (Gy)", row=1, col=2)
+            fig.update_yaxes(title_text="EQD2 (Gy)", row=1, col=3)
+            fig.update_layout(height=400, title_text="Temporal Delivery Analysis", showlegend=False)
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # Detailed breakdown
-            st.subheader("Detailed Analysis")
+            # Detailed analysis table
+            st.subheader("Comprehensive Analysis")
             
             analysis_data = {
-                'Metric': ['Total Organ Dose', 'BED', 'EQD2', 'EQD2₉₉', 'EQD2Max', 'Dose Rate Benefit'],
-                'Value (Gy)': [
-                    results['organ_dose'],
-                    results['bed'],
-                    results['eqd2'],
-                    eqd299,
-                    eqd2max,
-                    eqd2max - results['eqd2']
+                'Metric': ['Total Organ Dose', 'BED', 'EQD2', 'EQD2₉₉', 'Equivalent Fractions'],
+                'Value': [
+                    f"{results['organ_dose']:.2f} Gy",
+                    f"{results['bed']:.2f} Gy",
+                    f"{results['eqd2']:.2f} Gy",
+                    f"{eqd299:.2f} Gy",
+                    f"{results['equivalent_fractions']:.1f} fractions"
                 ],
-                'Interpretation': [
-                    'Physical dose absorbed',
-                    'Biological effectiveness',
-                    'Equivalent 2 Gy fractions',
-                    '99% delivery timepoint',
-                    'Initial rate sustained EQD2',
-                    'Exponential decay benefit'
+                'Clinical Interpretation': [
+                    'Physical dose absorbed by organ',
+                    'Biological effectiveness accounting for repair',
+                    'Equivalent conventional fractionation dose',
+                    'Biological effect at 99% delivery milestone',
+                    'Number of 2 Gy fractions with same biological effect'
                 ]
             }
             
@@ -464,7 +478,7 @@ def main():
     with tab3:
         st.header("Treatment Planning (BED-Based)")
         
-        st.markdown("Calculate cumulative BED and plan treatments based on BED limits")
+        st.markdown("Plan treatments using cumulative BED tracking with organ-specific limits")
         
         # Kidney risk assessment for dose limits
         if selected_organ == "Kidneys":
@@ -485,9 +499,9 @@ def main():
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("Previous Treatment History")
+            st.subheader("Treatment History & Planning")
             
-            num_previous = st.number_input("Number of previous treatments:", min_value=0, max_value=10, value=1, step=1)
+            num_previous = st.number_input("Number of previous treatments:", min_value=0, max_value=10, value=0, step=1)
             
             previous_treatments = []
             total_previous_bed = 0
@@ -511,8 +525,8 @@ def main():
             if num_previous > 0:
                 st.write(f"**Total Previous BED: {total_previous_bed:.2f} Gy**")
             
-            st.subheader("Planned Additional Treatment")
-            planned_dose = st.number_input("Planned additional dose (Gy):", min_value=0.0, value=5.0, step=0.1)
+            st.subheader("Planned Treatment")
+            planned_dose = st.number_input("Planned dose (Gy):", min_value=0.0, value=10.0, step=0.1)
             planned_half_life = st.number_input("Planned half-life (h):", min_value=0.1, value=67.0, step=0.1)
             
             if st.button("Calculate Treatment Plan", type="primary"):
@@ -526,27 +540,23 @@ def main():
                 if selected_organ == "Kidneys":
                     bed_limit = kidney_bed_limit
                 else:
-                    # Convert EQD2 tolerance limits to BED limits
-                    organ_eqd2_limits = {
-                        "Bone Marrow": 2.0, "Liver": 30.0, "Lungs": 20.0,
-                        "Heart": 26.0, "Spinal Cord": 50.0, "Salivary Glands": 26.0, "Thyroid": 45.0,
-                        "Lacrimal Glands": 30.0, "Bladder": 65.0, "Prostate": 76.0, "Breast": 50.0
-                    }
-                    eqd2_limit = organ_eqd2_limits.get(selected_organ, 25.0)
-                    # Convert EQD2 limit to BED limit: BED = EQD2 × (1 + 2/(α/β))
-                    bed_limit = eqd2_limit * (1 + 2 / alpha_beta)
+                    bed_limit = get_organ_bed_tolerance(selected_organ, alpha_beta)
                 
                 # Calculate remaining BED capacity
                 remaining_bed = bed_limit - total_previous_bed
                 
                 st.session_state.treatment_results = {
+                    'previous_treatments': previous_treatments,
                     'previous_bed': total_previous_bed,
                     'planned_bed': planned_bed,
+                    'planned_dose': planned_dose,
+                    'planned_half_life': planned_half_life,
                     'total_bed': total_bed,
                     'remaining_bed': remaining_bed,
                     'bed_limit': bed_limit,
                     'bed_ratio': total_bed / bed_limit,
-                    'organ': selected_organ
+                    'organ': selected_organ,
+                    'num_treatments': num_previous + 1
                 }
         
         with col2:
@@ -560,10 +570,8 @@ def main():
                 st.metric("Planned BED", f"{results['planned_bed']:.2f} Gy")
                 st.metric("Total BED", f"{results['total_bed']:.2f} Gy")
                 st.metric("BED Limit", f"{results['bed_limit']:.2f} Gy")
-                st.metric("Remaining BED", f"{results['remaining_bed']:.2f} Gy")
                 
                 # Safety assessment
-                st.subheader("Safety Assessment")
                 bed_ratio = results['bed_ratio']
                 
                 if bed_ratio <= 0.8:
@@ -577,18 +585,16 @@ def main():
                 if results['remaining_bed'] > 0:
                     max_additional_bed = results['remaining_bed']
                     st.info(f"""
-                    **Treatment Recommendations:**
-                    - Maximum additional BED: {max_additional_bed:.2f} Gy
-                    - Current planned BED: {results['planned_bed']:.2f} Gy
-                    - Utilization: {(results['planned_bed']/max_additional_bed)*100:.1f}% of remaining capacity
+                    **Treatment Capacity:**
+                    - Remaining BED: {max_additional_bed:.2f} Gy
+                    - Current plan: {results['planned_bed']:.2f} Gy
+                    - Utilization: {(results['planned_bed']/max_additional_bed)*100:.1f}% of remaining
                     """)
                     
                     if results['planned_bed'] > max_additional_bed:
-                        st.error(f"⚠️ Planned dose exceeds remaining capacity by {results['planned_bed'] - max_additional_bed:.2f} Gy BED")
-                        suggested_dose_reduction = (max_additional_bed / results['planned_bed']) * planned_dose
-                        st.write(f"💡 **Suggested dose reduction:** {suggested_dose_reduction:.1f} Gy (from {planned_dose:.1f} Gy)")
+                        st.error(f"⚠️ Planned dose exceeds capacity by {results['planned_bed'] - max_additional_bed:.2f} Gy BED")
                 else:
-                    st.error("❌ No remaining BED capacity. Treatment not recommended.")
+                    st.error("❌ No remaining BED capacity")
                 
                 # Visual representation
                 fig = go.Figure()
@@ -620,163 +626,18 @@ def main():
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
-                
-                # Detailed breakdown table
-                st.subheader("BED Analysis Summary")
-                
-                planning_data = {
-                    'Component': ['Previous Treatments', 'Planned Treatment', 'Total BED', 'BED Limit', 'Remaining Capacity'],
-                    'BED (Gy)': [
-                        results['previous_bed'], 
-                        results['planned_bed'], 
-                        results['total_bed'], 
-                        results['bed_limit'], 
-                        results['remaining_bed']
-                    ],
-                    'Percentage of Limit': [
-                        (results['previous_bed']/results['bed_limit'])*100,
-                        (results['planned_bed']/results['bed_limit'])*100,
-                        (results['total_bed']/results['bed_limit'])*100,
-                        100.0,
-                        (results['remaining_bed']/results['bed_limit'])*100
-                    ],
-                    'Status': [
-                        'Completed',
-                        'Planned',
-                        'Total',
-                        'Maximum',
-                        'Available'
-                    ]
-                }
-                
-                planning_df = pd.DataFrame(planning_data)
-                st.dataframe(planning_df, use_container_width=True)
     
     with tab4:
-        st.header("Dose-Response Analysis")
-        
-        st.subheader("Organ Dose vs. Biological Effect")
-        
-        # Dose range analysis
-        dose_range = st.slider("Dose range for analysis (Gy):", 1.0, 50.0, (5.0, 30.0), step=1.0)
-        half_life_analysis = st.number_input("Effective half-life for analysis (h):", min_value=1.0, value=67.0, step=1.0)
-        
-        if st.button("Generate Dose-Response Analysis"):
-            doses = np.linspace(dose_range[0], dose_range[1], 50)
-            
-            bed_values = []
-            eqd2_values = []
-            eqd299_values = []
-            eqd2max_values = []
-            g_factors = []
-            
-            for dose in doses:
-                bed, g_factor = calculate_bed_radiopharm(dose, alpha_beta, half_life_analysis, repair_half_time)
-                eqd2 = calculate_eqd2(bed, alpha_beta)
-                eqd299, _, _ = calculate_eqd299(dose, alpha_beta, half_life_analysis, repair_half_time)
-                eqd2max_dose, _, _ = calculate_eqd2max(dose, alpha_beta, half_life_analysis, repair_half_time)
-                
-                bed_values.append(bed)
-                eqd2_values.append(eqd2)
-                eqd299_values.append(eqd299)
-                eqd2max_values.append(eqd2max_dose)
-                g_factors.append(g_factor)
-            
-            # Create subplots
-            fig = make_subplots(
-                rows=2, cols=2,
-                subplot_titles=('BED vs Dose', 'EQD2 vs Dose', 'G-factor (Constant)', 'EQD2 vs EQD2₉₉ vs EQD2Max'),
-                specs=[[{"secondary_y": False}, {"secondary_y": False}],
-                       [{"secondary_y": False}, {"secondary_y": False}]]
-            )
-            
-            # BED plot
-            fig.add_trace(
-                go.Scatter(x=doses, y=bed_values, mode='lines', name='BED', line=dict(color='blue')),
-                row=1, col=1
-            )
-            
-            # EQD2 plot
-            fig.add_trace(
-                go.Scatter(x=doses, y=eqd2_values, mode='lines', name='EQD2', line=dict(color='red')),
-                row=1, col=2
-            )
-            
-            # G-factor plot (will be constant with simplified formula)
-            fig.add_trace(
-                go.Scatter(x=doses, y=g_factors, mode='lines', name='G-factor', line=dict(color='green')),
-                row=2, col=1
-            )
-            
-            # EQD2 vs EQD299 vs EQD2Max comparison
-            fig.add_trace(
-                go.Scatter(x=doses, y=eqd2_values, mode='lines', name='Total EQD2', line=dict(color='red')),
-                row=2, col=2
-            )
-            fig.add_trace(
-                go.Scatter(x=doses, y=eqd299_values, mode='lines', name='EQD2₉₉', line=dict(color='orange')),
-                row=2, col=2
-            )
-            fig.add_trace(
-                go.Scatter(x=doses, y=eqd2max_values, mode='lines', name='EQD2Max', line=dict(color='purple')),
-                row=2, col=2
-            )
-            
-            # Add organ tolerance line if available
-            organ_tolerance_limits = {
-                "Kidneys": 23.0, "Bone Marrow": 2.0, "Liver": 30.0, "Lungs": 20.0,
-                "Heart": 26.0, "Spinal Cord": 50.0, "Salivary Glands": 26.0, "Thyroid": 45.0,
-                "Lacrimal Glands": 30.0, "Bladder": 65.0, "Prostate": 76.0, "Breast": 50.0
-            }
-            
-            if selected_organ in organ_tolerance_limits:
-                tolerance_limit = organ_tolerance_limits[selected_organ]
-                
-                fig.add_hline(y=tolerance_limit, line_dash="dot", line_color="green", 
-                            annotation_text=f"Tolerance: {tolerance_limit} Gy", row=2, col=2)
-            
-            fig.update_layout(height=800, title_text="Comprehensive Dose-Response Analysis")
-            fig.update_xaxes(title_text="Dose (Gy)")
-            fig.update_yaxes(title_text="BED (Gy)", row=1, col=1)
-            fig.update_yaxes(title_text="EQD2 (Gy)", row=1, col=2)
-            fig.update_yaxes(title_text="G-factor", row=2, col=1)
-            fig.update_yaxes(title_text="EQD2 (Gy)", row=2, col=2)
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Data table
-            analysis_df = pd.DataFrame({
-                'Dose (Gy)': doses,
-                'BED (Gy)': bed_values,
-                'EQD2 (Gy)': eqd2_values,
-                'EQD2₉₉ (Gy)': eqd299_values,
-                'EQD2Max (Gy)': eqd2max_values,
-                'G-factor': g_factors
-            })
-            
-            st.subheader("Dose-Response Data")
-            st.dataframe(analysis_df.round(3))
-    
-    with tab5:
         st.header("Safety Assessment Dashboard (BED-Based)")
         
-        if 'primary_results' in st.session_state:
-            results = st.session_state.primary_results
-            
-            # Calculate safety metrics in BED
-            bed_99, time_99, dose_99 = calculate_eqd299(results['organ_dose'], results['alpha_beta'], 
-                                                       results['effective_half_life'], results['repair_half_time'])
-            # Convert EQD2₉₉ back to BED for consistency
-            bed_99_actual = bed_99 * (1 + 2 / results['alpha_beta'])
-            
-            bed_max, initial_dose_rate, total_dose_used = calculate_eqd2max(results['organ_dose'], results['alpha_beta'], 
-                                                                          results['effective_half_life'], results['repair_half_time'])
-            # Convert EQD2Max back to BED for consistency  
-            bed_max_actual = bed_max * (1 + 2 / results['alpha_beta'])
-            
-            # Get organ BED tolerance limits
+        # Check if we have both single treatment and cumulative data
+        has_primary = 'primary_results' in st.session_state
+        has_treatment_plan = 'treatment_results' in st.session_state
+        
+        if has_primary or has_treatment_plan:
+            # Get organ tolerance limit
+            kidney_risk_high = False
             if selected_organ == "Kidneys":
-                # Use risk-stratified BED limits for kidneys
                 st.subheader("Kidney Risk Assessment")
                 kidney_risk = st.radio(
                     "Patient kidney risk status:",
@@ -784,303 +645,278 @@ def main():
                     help="Select patient's kidney risk status to determine appropriate BED limit",
                     key="safety_kidney_risk"
                 )
+                kidney_risk_high = "High risk" in kidney_risk
                 
-                if "Low risk" in kidney_risk:
-                    organ_bed_tolerance = 40.0  # Gy BED
-                    st.info(f"🟢 **Low Risk Patient**: BED limit = {organ_bed_tolerance} Gy")
+                if not kidney_risk_high:
+                    st.info(f"🟢 **Low Risk Patient**: BED limit = 40.0 Gy")
                 else:
-                    organ_bed_tolerance = 28.0  # Gy BED
-                    st.warning(f"🟡 **High Risk Patient**: BED limit = {organ_bed_tolerance} Gy")
+                    st.warning(f"🟡 **High Risk Patient**: BED limit = 28.0 Gy")
+            
+            organ_bed_tolerance = get_organ_bed_tolerance(selected_organ, alpha_beta, kidney_risk_high)
+            
+            # Create tabs for single treatment vs cumulative assessment
+            if has_primary and has_treatment_plan:
+                safety_tab1, safety_tab2 = st.tabs(["🔬 Single Treatment Safety", "📊 Cumulative Treatment Safety"])
             else:
-                # Convert EQD2 tolerance limits to BED limits for other organs
-                organ_eqd2_limits = {
-                    "Bone Marrow": 2.0, "Liver": 30.0, "Lungs": 20.0,
-                    "Heart": 26.0, "Spinal Cord": 50.0, "Salivary Glands": 26.0, "Thyroid": 45.0,
-                    "Lacrimal Glands": 30.0, "Bladder": 65.0, "Prostate": 76.0, "Breast": 50.0
-                }
-                eqd2_limit = organ_eqd2_limits.get(selected_organ, 25.0)
-                # Convert EQD2 limit to BED limit: BED = EQD2 × (1 + 2/(α/β))
-                organ_bed_tolerance = eqd2_limit * (1 + 2 / results['alpha_beta'])
+                safety_tab1 = st.container()
+                safety_tab2 = None
             
-            # Safety ratios based on BED
-            tolerance_ratio = results['bed'] / organ_bed_tolerance
-            delivery_ratio = results['bed'] / bed_99_actual  # Current vs 99% delivery point
-            dose_rate_ratio = results['bed'] / bed_max_actual  # Current vs maximum rate effect
-            
-            # Safety dashboard
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Current BED", f"{results['bed']:.1f} Gy")
-                
-            with col2:
-                st.metric("BED₉₉", f"{bed_99_actual:.1f} Gy", f"At {time_99:.0f}h")
-                
-            with col3:
-                st.metric("BEDMax", f"{bed_max_actual:.1f} Gy", f"Constant rate")
+            # Single Treatment Safety Assessment
+            with safety_tab1:
+                if has_primary:
+                    st.subheader("Single Treatment Safety Analysis")
+                    results = st.session_state.primary_results
                     
-            with col4:
-                if tolerance_ratio <= 0.8:
-                    st.metric("Tolerance Status", "✅ LOW", f"{tolerance_ratio:.2f}")
-                elif tolerance_ratio <= 1.0:
-                    st.metric("Tolerance Status", "⚠️ MODERATE", f"{tolerance_ratio:.2f}")
+                    # Calculate safety metrics in BED
+                    bed_99, time_99, dose_99 = calculate_eqd299(results['organ_dose'], results['alpha_beta'], 
+                                                               results['effective_half_life'], results['repair_half_time'])
+                    # Convert EQD2₉₉ back to BED for consistency
+                    bed_99_actual = bed_99 * (1 + 2 / results['alpha_beta'])
+                    
+                    # Safety ratios based on BED
+                    tolerance_ratio = results['bed'] / organ_bed_tolerance
+                    
+                    # Safety dashboard
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric("Current BED", f"{results['bed']:.1f} Gy")
+                        
+                    with col2:
+                        st.metric("BED₉₉", f"{bed_99_actual:.1f} Gy", f"At {time_99:.0f}h")
+                        
+                    with col3:
+                        st.metric("Equivalent Fractions", f"{results['equivalent_fractions']:.1f}", f"2 Gy fractions")
+                            
+                    with col4:
+                        if tolerance_ratio <= 0.8:
+                            st.metric("Tolerance Status", "✅ LOW", f"{tolerance_ratio:.2f}")
+                        elif tolerance_ratio <= 1.0:
+                            st.metric("Tolerance Status", "⚠️ MODERATE", f"{tolerance_ratio:.2f}")
+                        else:
+                            st.metric("Tolerance Status", "❌ HIGH", f"{tolerance_ratio:.2f}")
+                    
+                    # Visual safety assessment
+                    fig = go.Figure()
+                    
+                    # Add bars for different BED levels
+                    categories = ['Current BED', 'BED₉₉', 'BED Tolerance']
+                    values = [results['bed'], bed_99_actual, organ_bed_tolerance]
+                    colors = ['blue', 'orange', 'red']
+                    
+                    fig.add_trace(go.Bar(
+                        x=categories,
+                        y=values,
+                        marker_color=colors,
+                        text=[f"{v:.1f} Gy" for v in values],
+                        textposition='auto'
+                    ))
+                    
+                    fig.update_layout(
+                        title=f"Single Treatment BED Safety Assessment for {selected_organ}",
+                        yaxis_title="BED (Gy)",
+                        height=400
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Clinical context
+                    remaining_bed = organ_bed_tolerance - results['bed']
+                    st.info(f"""
+                    **Clinical Context for {selected_organ} (Single Treatment):**
+                    
+                    **Current Treatment:**
+                    - BED = {results['bed']:.1f} Gy (biological effectiveness)
+                    - Equivalent to {results['equivalent_fractions']:.1f} fractions of 2 Gy each
+                    - Delivery over {time_99/24:.1f} days for 99% completion
+                    
+                    **Safety Profile:**
+                    - Tolerance utilization: {tolerance_ratio*100:.1f}%
+                    - Remaining BED capacity: {remaining_bed:.1f} Gy
+                    - G-factor = {results['g_factor']:.3f} (repair competition during delivery)
+                    """)
                 else:
-                    st.metric("Tolerance Status", "❌ HIGH", f"{tolerance_ratio:.2f}")
+                    st.info("Single treatment results not available. Calculate primary dosimetry first.")
             
-            # Visual safety assessment
-            fig = go.Figure()
+            # Cumulative Treatment Safety Assessment
+            if safety_tab2 is not None:
+                with safety_tab2:
+                    if has_treatment_plan:
+                        st.subheader("Cumulative Treatment Safety Analysis")
+                        treat_results = st.session_state.treatment_results
+                        
+                        # Enhanced cumulative safety dashboard
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        cumulative_tolerance_ratio = treat_results['total_bed'] / organ_bed_tolerance
+                        
+                        with col1:
+                            st.metric("Total Treatments", f"{treat_results['num_treatments']}")
+                            
+                        with col2:
+                            st.metric("Cumulative BED", f"{treat_results['total_bed']:.1f} Gy")
+                            
+                        with col3:
+                            st.metric("BED Limit", f"{organ_bed_tolerance:.1f} Gy")
+                            
+                        with col4:
+                            if cumulative_tolerance_ratio <= 0.8:
+                                st.metric("Cumulative Risk", "✅ LOW", f"{cumulative_tolerance_ratio:.2f}")
+                            elif cumulative_tolerance_ratio <= 1.0:
+                                st.metric("Cumulative Risk", "⚠️ MODERATE", f"{cumulative_tolerance_ratio:.2f}")
+                            else:
+                                st.metric("Cumulative Risk", "❌ HIGH", f"{cumulative_tolerance_ratio:.2f}")
+                        
+                        # Detailed treatment breakdown
+                        st.subheader("Treatment History Summary")
+                        
+                        if treat_results['previous_treatments']:
+                            treatment_data = []
+                            cumulative_bed = 0
+                            
+                            for i, treatment in enumerate(treat_results['previous_treatments']):
+                                cumulative_bed += treatment['bed']
+                                treatment_data.append({
+                                    'Treatment #': i + 1,
+                                    'Dose (Gy)': f"{treatment['dose']:.2f}",
+                                    'Half-life (h)': f"{treatment['half_life']:.1f}",
+                                    'BED (Gy)': f"{treatment['bed']:.2f}",
+                                    'Cumulative BED (Gy)': f"{cumulative_bed:.2f}",
+                                    'Tolerance %': f"{(cumulative_bed/organ_bed_tolerance)*100:.1f}%"
+                                })
+                            
+                            # Add planned treatment
+                            if treat_results['planned_bed'] > 0:
+                                cumulative_bed += treat_results['planned_bed']
+                                treatment_data.append({
+                                    'Treatment #': f"{len(treat_results['previous_treatments']) + 1} (Planned)",
+                                    'Dose (Gy)': f"{treat_results['planned_dose']:.2f}",
+                                    'Half-life (h)': f"{treat_results['planned_half_life']:.1f}",
+                                    'BED (Gy)': f"{treat_results['planned_bed']:.2f}",
+                                    'Cumulative BED (Gy)': f"{cumulative_bed:.2f}",
+                                    'Tolerance %': f"{(cumulative_bed/organ_bed_tolerance)*100:.1f}%"
+                                })
+                            
+                            df_treatments = pd.DataFrame(treatment_data)
+                            st.dataframe(df_treatments, use_container_width=True)
+                        
+                        # Cumulative BED progression visualization
+                        st.subheader("Cumulative BED Progression")
+                        
+                        fig = go.Figure()
+                        
+                        # Calculate cumulative progression
+                        treatments = treat_results['previous_treatments'].copy()
+                        if treat_results['planned_bed'] > 0:
+                            treatments.append({
+                                'dose': treat_results['planned_dose'],
+                                'half_life': treat_results['planned_half_life'],
+                                'bed': treat_results['planned_bed']
+                            })
+                        
+                        cumulative_beds = []
+                        treatment_numbers = []
+                        colors = []
+                        
+                        cumulative = 0
+                        for i, treatment in enumerate(treatments):
+                            cumulative += treatment['bed']
+                            cumulative_beds.append(cumulative)
+                            treatment_numbers.append(f"Treatment {i+1}")
+                            
+                            # Color coding based on tolerance level
+                            ratio = cumulative / organ_bed_tolerance
+                            if ratio <= 0.8:
+                                colors.append('green')
+                            elif ratio <= 1.0:
+                                colors.append('orange')
+                            else:
+                                colors.append('red')
+                        
+                        # Add bars showing cumulative BED
+                        fig.add_trace(go.Bar(
+                            x=treatment_numbers,
+                            y=cumulative_beds,
+                            marker_color=colors,
+                            text=[f"{bed:.1f} Gy" for bed in cumulative_beds],
+                            textposition='auto'
+                        ))
+                        
+                        # Add tolerance limit line
+                        fig.add_hline(y=organ_bed_tolerance, line_dash="dash", line_color="red", 
+                                    annotation_text=f"BED Limit: {organ_bed_tolerance:.1f} Gy")
+                        
+                        # Add comfort zones
+                        fig.add_hrect(y0=0, y1=organ_bed_tolerance*0.8, 
+                                    fillcolor="green", opacity=0.1, annotation_text="Safe Zone")
+                        fig.add_hrect(y0=organ_bed_tolerance*0.8, y1=organ_bed_tolerance, 
+                                    fillcolor="orange", opacity=0.1, annotation_text="Caution Zone")
+                        fig.add_hrect(y0=organ_bed_tolerance, y1=max(max(cumulative_beds), organ_bed_tolerance*1.2), 
+                                    fillcolor="red", opacity=0.1, annotation_text="Risk Zone")
+                        
+                        fig.update_layout(
+                            title=f"Cumulative BED Safety Assessment for {selected_organ}",
+                            yaxis_title="Cumulative BED (Gy)",
+                            xaxis_title="Treatment Sequence",
+                            height=500
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Comprehensive cumulative safety summary
+                        remaining_capacity = organ_bed_tolerance - treat_results['total_bed']
+                        equivalent_total_fractions = calculate_equivalent_fractions(treat_results['total_bed'], alpha_beta)
+                        
+                        st.info(f"""
+                        **Cumulative Safety Summary for {selected_organ}:**
+                        
+                        **Treatment History:**
+                        - Total treatments: {treat_results['num_treatments']}
+                        - Cumulative BED: {treat_results['total_bed']:.1f} Gy
+                        - Equivalent total fractions: {equivalent_total_fractions:.1f} × 2 Gy
+                        
+                        **Risk Assessment:**
+                        - Tolerance utilization: {(treat_results['total_bed']/organ_bed_tolerance)*100:.1f}%
+                        - Remaining capacity: {remaining_capacity:.1f} Gy BED
+                        - Risk level: {"LOW" if cumulative_tolerance_ratio <= 0.8 else "MODERATE" if cumulative_tolerance_ratio <= 1.0 else "HIGH"}
+                        
+                        **Future Treatment Capacity:**
+                        - {"Additional treatments possible" if remaining_capacity > 0 else "No remaining capacity"}
+                        {f"- Maximum additional BED: {remaining_capacity:.1f} Gy" if remaining_capacity > 0 else ""}
+                        """)
+                    else:
+                        st.info("Cumulative treatment results not available. Calculate treatment planning first.")
             
-            # Add bars for different BED levels
-            categories = ['Current BED', 'BED₉₉', 'BEDMax', 'BED Tolerance']
-            values = [results['bed'], bed_99_actual, bed_max_actual, organ_bed_tolerance]
-            colors = ['blue', 'orange', 'purple', 'red']
-            
-            fig.add_trace(go.Bar(
-                x=categories,
-                y=values,
-                marker_color=colors,
-                text=[f"{v:.1f} Gy" for v in values],
-                textposition='auto'
-            ))
-            
-            fig.update_layout(
-                title=f"BED Safety Assessment for {selected_organ}",
-                yaxis_title="BED (Gy)",
-                height=400
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Delivery timeline
-            st.subheader("BED Delivery Timeline Analysis")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("**Key Timepoints:**")
-                st.write(f"• 50% delivery: {0.693 * results['effective_half_life']:.1f} hours")
-                st.write(f"• 90% delivery: {2.303 * results['effective_half_life']:.1f} hours")
-                st.write(f"• 99% delivery: {time_99:.1f} hours ({time_99/24:.1f} days)")
-                st.write(f"• 99.9% delivery: {6.908 * results['effective_half_life']:.1f} hours")
-                st.write(f"• Initial dose rate: {initial_dose_rate:.4f} Gy/h")
-                
-            with col2:
-                st.write("**Biological Effects (BED):**")
-                st.write(f"• Current total BED: {results['bed']:.1f} Gy")
-                st.write(f"• BED at 99% delivery: {bed_99_actual:.1f} Gy")
-                st.write(f"• BED at constant rate: {bed_max_actual:.1f} Gy")
-                st.write(f"• Organ BED tolerance: {organ_bed_tolerance:.1f} Gy")
-                
-                dose_rate_benefit = bed_max_actual - results['bed']
-                st.write(f"• Dose rate benefit: {dose_rate_benefit:.1f} Gy BED")
-            
-            # Risk assessment table
-            st.subheader("BED Risk Assessment Summary")
-            
-            risk_data = {
-                'Parameter': ['Current Treatment', 'At 99% Delivery', 'Constant Rate Delivery', 'Organ Tolerance'],
-                'BED (Gy)': [results['bed'], bed_99_actual, bed_max_actual, organ_bed_tolerance],
-                'Ratio to Tolerance': [tolerance_ratio, bed_99_actual/organ_bed_tolerance, bed_max_actual/organ_bed_tolerance, 1.0],
-                'Interpretation': [
-                    'Actual treatment effect',
-                    '99% delivery timepoint',
-                    'Initial rate sustained',
-                    'BED safety limit'
-                ]
-            }
-            
-            risk_df = pd.DataFrame(risk_data)
-            st.dataframe(risk_df, use_container_width=True)
-            
-            # Recommendations
-            st.subheader("Clinical Recommendations")
-            
-            if tolerance_ratio <= 0.8:
-                st.success("✅ **LOW RISK**: Current BED is well within safety limits. Treatment can proceed as planned.")
-            elif tolerance_ratio <= 1.0:
-                st.warning("⚠️ **MODERATE RISK**: BED approaches tolerance threshold. Consider close monitoring.")
-            else:
-                st.error("❌ **HIGH RISK**: BED exceeds tolerance threshold. Consider dose reduction or fractionation.")
-            
-            # Dose rate interpretation
-            dose_rate_benefit = bed_max_actual - results['bed']
-            if dose_rate_benefit > 0:
-                st.info(f"""
-                **Dose Rate Benefit (BED Analysis):**
-                - Exponential decay reduces BED by {dose_rate_benefit:.1f} Gy compared to constant rate delivery
-                - Initial dose rate = {initial_dose_rate:.4f} Gy/h would be sustained
-                - G-factor = {results['g_factor']:.3f} indicates repair during exponential delivery
-                - Exponential decay provides significant normal tissue sparing vs constant rate
-                - BED reduction = {(dose_rate_benefit/bed_max_actual)*100:.1f}% sparing effect
-                """)
-            else:
-                st.warning("⚠️ **No dose rate benefit**: Very fast effective half-life provides limited sparing")
-                
-            # BED interpretation
-            st.info(f"""
-            **BED Metrics Interpretation:**
-            
-            **Current BED = {results['bed']:.1f} Gy**
-            - Actual biological effectiveness of the treatment
-            - Accounts for dose delivery pattern and repair kinetics
-            - Primary metric for safety assessment
-            
-            **BED₉₉ = {bed_99_actual:.1f} Gy**
-            - BED when 99% of dose has been delivered
-            - Occurs at t = {time_99:.1f} hours ({time_99/24:.1f} days) after administration
-            - Shows temporal progression of biological effects
-            
-            **BEDMax = {bed_max_actual:.1f} Gy**
-            - BED if initial dose rate continued forever
-            - Initial dose rate = {initial_dose_rate:.4f} Gy/h sustained constantly
-            - Maximum possible biological effect from this dose rate pattern
-            - Shows protective effect of exponential decay
-            
-            **Organ BED Tolerance = {organ_bed_tolerance:.1f} Gy**
-            {"- Risk-stratified limit for kidney patients" if selected_organ == "Kidneys" else "- Organ-specific safety threshold"}
-            - Based on clinical outcome data and NTCP models
-            - Primary safety constraint for treatment planning
-            """)
-            
-            # Additional safety metrics
-            st.subheader("Additional Safety Metrics")
-            
-            remaining_bed = organ_bed_tolerance - results['bed']
-            utilization = (results['bed'] / organ_bed_tolerance) * 100
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Remaining BED Capacity", f"{remaining_bed:.1f} Gy")
-            with col2:
-                st.metric("BED Utilization", f"{utilization:.1f}%")
-            with col3:
-                safety_margin = (organ_bed_tolerance - results['bed']) / organ_bed_tolerance * 100
-                st.metric("Safety Margin", f"{safety_margin:.1f}%")
-                
-            if remaining_bed > 0:
-                st.success(f"✅ **Available for future treatments:** {remaining_bed:.1f} Gy BED remaining")
-            else:
-                st.error("❌ **No capacity for re-treatment:** BED limit exceeded")
-        
         else:
-            st.info("Please calculate primary dosimetry first to see safety assessment.")
+            st.info("Please calculate primary dosimetry and/or treatment planning first to see safety assessment.")
     
     # Footer with methodology
     st.markdown("---")
     st.markdown("""
-    ### 📚 Methodology & Formulas
+    ### 📚 Methodology & Clinical Application
     
     **Primary Calculations:**
     - **BED (Radiopharmaceutical):** D × (1 + G × D/(α/β))
     - **G-factor:** λ_eff/(λ_eff + μ_repair) where λ_eff = ln(2)/T_eff, μ_repair = ln(2)/T_repair
     - **EQD2:** BED / (1 + 2/(α/β))
+    - **Equivalent Fractions:** BED / [2 × (1 + 2/(α/β))]
     
     **Advanced Metrics:**
-    - **EQD2₉₉:** EQD2 when 99% of dose has been delivered (temporal concept)
-    - **Time for 99% delivery:** t₉₉ = -ln(0.01) × T_eff / ln(2) ≈ 6.64 × T_eff
-    - **EQD2Max:** EQD2 from exponential delivery over initial 24 hours
-    - **EQD2R:** EQD2_tolerance - EQD2_previous (remaining dose capacity)
+    - **EQD2₉₉:** EQD2 when 99% of dose has been delivered (temporal milestone)
+    - **Delivery Efficiency:** Fraction of dose delivered at key timepoints
+    - **BED Tolerance Limits:** Organ-specific safety thresholds
+    - **Cumulative BED:** Sum of BED from multiple treatments
     
     **Kidney-Specific BED Limits:**
     - **High Risk Patients:** 28 Gy BED (existing kidney disease/risk factors)
     - **Low Risk Patients:** 40 Gy BED (no existing kidney disease)
-    - **Treatment Planning:** Uses BED-based approach for cumulative dose tracking
-    
-    **G-factor Formula:**
-    - **Formula:** G = λ_eff/(λ_eff + μ_repair)
-    - **Where:** λ_eff = ln(2)/T_eff (effective decay constant), μ_repair = ln(2)/T_repair (repair constant)
-    - **Physical meaning:** Fraction of damage that becomes permanent due to limited repair during dose delivery
-    - **Range:** 0 < G < 1 (G approaches 1 for very fast delivery, approaches 0 for very slow delivery)
-    
-    **EQD2Max Concept:**
-    - **Sustained dose rate:** Uses initial dose rate as if continued forever
-    - **BED calculation:** BED = D × (1 + (2R)/(α/β × μ)) for sustained rate R
-    - **EQD2Max:** BED of total dose delivered at constant initial rate
-    - **Purpose:** Compare exponential decay vs sustained constant rate delivery
-    
-    **EQD2₉₉ Concept:**
-    - **Initial dose rate:** dose_rate_0 = D_total × λ_eff (Gy/h)
-    - **Maximum 24h dose:** D_max_24h = dose_rate_0 × 24 (Gy)
-    - **EQD2Max:** BED of D_max_24h delivered acutely (G = 1)
-    - **Purpose:** Compare protracted vs acute delivery biological effects
-    
-    **Clinical Applications:**
-    - Treatment planning optimization with BED-based limits
-    - Dose rate effect quantification
-    - Cumulative dose tracking across multiple treatments
-    - Kidney risk-stratified dose planning
-    - Temporal effect analysis
-    - Risk-benefit analysis
     
     **⚠️ Important Notes:**
     - This calculator is for research and educational purposes
     - Clinical decisions require qualified medical physics consultation
-    - Organ-specific parameters may vary between patients
     - Consider individual patient factors and clinical context
-    - EQD2₉₉ is a kinetic endpoint, EQD2Max is a delivery timing comparison
-    - **EQD2Max** = EQD2 from exponential delivery over initial 24 hours
-    - **Dose rate effects** (EQD2Max)
-    - **Treatment optimization** (Extended delivery benefit)
+    - Cumulative BED tracking essential for multiple treatment safety
     """)
-    
-    # Data export functionality
-    st.subheader("📥 Data Export")
-    
-    if st.button("Export Current Session Data"):
-        if 'primary_results' in st.session_state:
-            results = st.session_state.primary_results
-            
-            # Calculate additional metrics for export
-            eqd299, time_99, dose_99 = calculate_eqd299(results['organ_dose'], results['alpha_beta'], 
-                                                       results['effective_half_life'], results['repair_half_time'])
-            eqd2max, initial_dose_rate, total_dose_used = calculate_eqd2max(results['organ_dose'], results['alpha_beta'], 
-                                                                           results['effective_half_life'], results['repair_half_time'])
-            
-            # Get organ tolerance
-            organ_tolerance_limits = {
-                "Bone Marrow": 2.0, "Liver": 30.0, "Lungs": 20.0,
-                "Heart": 26.0, "Spinal Cord": 50.0, "Salivary Glands": 26.0, "Thyroid": 45.0,
-                "Lacrimal Glands": 30.0, "Bladder": 65.0, "Prostate": 76.0, "Breast": 50.0
-            }
-            
-            if selected_organ == "Kidneys":
-                # Use BED-based limits for kidneys (converted to EQD2 for export)
-                organ_tolerance_bed = 28.0  # Default to high risk
-                organ_tolerance = calculate_eqd2(organ_tolerance_bed * (1 + 2/alpha_beta), alpha_beta)
-            else:
-                organ_tolerance = organ_tolerance_limits.get(selected_organ, 25.0)
-            
-            export_data = {
-                'Parameter': [
-                    'Organ', 'Alpha/Beta Ratio (Gy)', 'Repair Half-time (h)',
-                    'Organ Dose (Gy)', 'Effective Half-life (h)', 'BED (Gy)',
-                    'EQD2 (Gy)', 'EQD2₉₉ (Gy)', 'Time to 99% (h)', 'EQD2Max (Gy)',
-                    'Initial Dose Rate (Gy/h)', 'Total Dose Used (Gy)', 'Organ Tolerance (Gy)',
-                    'G-factor', 'Dose Rate Factor', 'Tolerance Ratio', 'Dose Rate Benefit (Gy)'
-                ],
-                'Value': [
-                    results['organ'], results['alpha_beta'], results['repair_half_time'],
-                    results['organ_dose'], results['effective_half_life'], results['bed'],
-                    results['eqd2'], eqd299, time_99, eqd2max,
-                    initial_dose_rate, total_dose_used, organ_tolerance,
-                    results['g_factor'], results['drf'], results['eqd2']/organ_tolerance,
-                    eqd2max - results['eqd2']
-                ]
-            }
-            
-            export_df = pd.DataFrame(export_data)
-            
-            # Convert to CSV
-            csv = export_df.to_csv(index=False)
-            st.download_button(
-                label="Download as CSV",
-                data=csv,
-                file_name=f"radiopharm_dosimetry_{selected_organ.lower().replace(' ', '_')}.csv",
-                mime="text/csv"
-            )
-            
-            st.success("Data prepared for export!")
-        else:
-            st.warning("No calculation results to export. Please perform calculations first.")
 
 if __name__ == "__main__":
     main()
