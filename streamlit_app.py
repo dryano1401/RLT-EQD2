@@ -209,12 +209,12 @@ def get_organ_bed_tolerance(selected_organ, alpha_beta, kidney_risk_high=False):
 
 def main():
     st.set_page_config(
-        page_title="Radiopharmaceutical Dosimetry Calculator",
+        page_title="Radiopharmaceutical Dose Assessment",
         page_icon="⚛️",
         layout="wide"
     )
     
-    st.title("⚛️ Radiopharmaceutical Dosimetry Calculator")
+    st.title("⚛️ Radiopharmaceutical Dose Assessment")
     st.markdown("Clinical calculator for BED, EQD2, and delivery analysis in radiopharmaceutical therapy")
     
     # Sidebar for organ selection
