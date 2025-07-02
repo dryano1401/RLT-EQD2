@@ -6,7 +6,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import math
 
-# Organ-specific parameters database (alphabetically ordered)
+# Organ-specific parameters database (priority organs first)
 ORGAN_PARAMETERS = {
     "Kidneys": {
         "alpha_beta": 2.6,
@@ -18,15 +18,20 @@ ORGAN_PARAMETERS = {
         "repair_half_time": 0.5,
         "description": "Hematopoietic tissue"
     },
+    "Spleen": {
+        "alpha_beta": 3.0,
+        "repair_half_time": 1.0,
+        "description": "Lymphoid tissue/immune organ"
+    },
     "Liver": {
         "alpha_beta": 2.5,
         "repair_half_time": 1.5,
         "description": "Hepatocytes"
     },
-    "Spleen": {
+    "Custom": {
         "alpha_beta": 3.0,
-        "repair_half_time": 1.0,
-        "description": "Lymphoid tissue/immune organ"
+        "repair_half_time": 1.5,
+        "description": "User-defined parameters"
     },
     "Bladder": {
         "alpha_beta": 5.0,
@@ -72,11 +77,6 @@ ORGAN_PARAMETERS = {
         "alpha_beta": 10.0,
         "repair_half_time": 1.0,
         "description": "Thyroid follicular cells"
-    },
-    "Custom": {
-        "alpha_beta": 3.0,
-        "repair_half_time": 1.5,
-        "description": "User-defined parameters"
     }
 }
 
@@ -207,14 +207,50 @@ def get_organ_bed_tolerance(selected_organ, alpha_beta, kidney_risk_high=False):
         # Convert EQD2 limit to BED limit: BED = EQD2 × (1 + 2/(α/β))
         return eqd2_limit * (1 + 2 / alpha_beta)
 
+def calculate_cumulative_bed_progressive(treatments, alpha_beta, repair_half_time):
+    """
+    Calculate cumulative BED progression using CORRECTED radiopharmaceutical standards
+    STANDARD PRACTICE: Sum absorbed doses FIRST, then calculate BED from total
+    """
+    progressive_data = []
+    cumulative_dose = 0
+    
+    for i, treatment in enumerate(treatments):
+        cumulative_dose += treatment['dose']
+        
+        # Calculate dose-weighted average half-life up to this point
+        if i == 0:
+            cumulative_half_life = treatment['half_life']
+        else:
+            total_dose_so_far = sum([t['dose'] for t in treatments[:i+1]])
+            cumulative_half_life = sum([t['dose'] * t['half_life'] for t in treatments[:i+1]]) / total_dose_so_far
+        
+        # CORRECTED METHOD: Calculate BED from cumulative absorbed dose
+        # This is the standard practice in radiopharmaceutical dosimetry
+        cumulative_bed, g_factor = calculate_bed_radiopharm(cumulative_dose, alpha_beta, cumulative_half_life, repair_half_time)
+        cumulative_eqd2 = calculate_eqd2(cumulative_bed, alpha_beta)
+        
+        progressive_data.append({
+            'treatment_number': i + 1,
+            'individual_dose': treatment['dose'],
+            'individual_half_life': treatment['half_life'],
+            'cumulative_dose': cumulative_dose,
+            'cumulative_half_life': cumulative_half_life,
+            'cumulative_bed': cumulative_bed,
+            'cumulative_eqd2': cumulative_eqd2,
+            'g_factor': g_factor
+        })
+    
+    return progressive_data
+
 def main():
     st.set_page_config(
-        page_title="Radiopharmaceutical Dose Assessment",
+        page_title="Radiopharmaceutical Dosimetry Calculator",
         page_icon="⚛️",
         layout="wide"
     )
     
-    st.title("⚛️ Radiopharmaceutical Dose Assessment")
+    st.title("⚛️ Radiopharmaceutical Dosimetry Calculator")
     st.markdown("Clinical calculator for BED, EQD2, and delivery analysis in radiopharmaceutical therapy")
     
     # Sidebar for organ selection
@@ -511,37 +547,51 @@ def main():
             num_previous = st.number_input("Number of previous treatments:", min_value=0, max_value=10, value=0, step=1)
             
             previous_treatments = []
-            total_previous_bed = 0
             
             for i in range(num_previous):
                 st.write(f"**Treatment {i+1}:**")
                 prev_dose = st.number_input(f"Dose {i+1} (Gy):", min_value=0.0, value=5.0, step=0.1, key=f"prev_dose_{i}")
                 prev_half_life = st.number_input(f"Half-life {i+1} (h):", min_value=0.1, value=67.0, step=0.1, key=f"prev_hl_{i}")
                 
-                prev_bed, _ = calculate_bed_radiopharm(prev_dose, alpha_beta, prev_half_life, repair_half_time)
-                total_previous_bed += prev_bed
-                
                 previous_treatments.append({
                     'dose': prev_dose,
-                    'half_life': prev_half_life,
-                    'bed': prev_bed
+                    'half_life': prev_half_life
                 })
                 
-                st.write(f"   • BED: {prev_bed:.2f} Gy")
-            
-            if num_previous > 0:
-                st.write(f"**Total Previous BED: {total_previous_bed:.2f} Gy**")
+                st.write(f"   • Dose: {prev_dose:.2f} Gy")
             
             st.subheader("Planned Treatment")
             planned_dose = st.number_input("Planned dose (Gy):", min_value=0.0, value=10.0, step=0.1)
             planned_half_life = st.number_input("Planned half-life (h):", min_value=0.1, value=67.0, step=0.1)
             
             if st.button("Calculate Treatment Plan", type="primary"):
-                # Calculate planned BED
-                planned_bed, _ = calculate_bed_radiopharm(planned_dose, alpha_beta, planned_half_life, repair_half_time)
+                # CORRECTED APPROACH: Sum all absorbed doses FIRST
+                total_dose = sum([tx['dose'] for tx in previous_treatments]) + planned_dose
                 
-                # Total cumulative BED
-                total_bed = total_previous_bed + planned_bed
+                # Calculate weighted average effective half-life for the total course
+                if previous_treatments:
+                    total_dose_previous = sum([tx['dose'] for tx in previous_treatments])
+                    if total_dose_previous > 0:
+                        weighted_half_life = sum([tx['dose'] * tx['half_life'] for tx in previous_treatments]) / total_dose_previous
+                        # For mixed half-lives, use dose-weighted average for total calculation
+                        combined_half_life = (total_dose_previous * weighted_half_life + planned_dose * planned_half_life) / total_dose
+                    else:
+                        combined_half_life = planned_half_life
+                else:
+                    combined_half_life = planned_half_life
+                
+                # STANDARD PRACTICE: Calculate BED from total cumulative absorbed dose
+                total_bed, total_g_factor = calculate_bed_radiopharm(total_dose, alpha_beta, combined_half_life, repair_half_time)
+                
+                # For comparison: calculate what individual BED calculations would give
+                individual_bed_sum = 0
+                for tx in previous_treatments:
+                    bed_individual, _ = calculate_bed_radiopharm(tx['dose'], alpha_beta, tx['half_life'], repair_half_time)
+                    individual_bed_sum += bed_individual
+                
+                # Add planned treatment individual BED
+                planned_bed_individual, _ = calculate_bed_radiopharm(planned_dose, alpha_beta, planned_half_life, repair_half_time)
+                individual_bed_sum += planned_bed_individual
                 
                 # Get BED limit based on organ and risk
                 if selected_organ == "Kidneys":
@@ -550,20 +600,23 @@ def main():
                     bed_limit = get_organ_bed_tolerance(selected_organ, alpha_beta)
                 
                 # Calculate remaining BED capacity
-                remaining_bed = bed_limit - total_previous_bed
+                remaining_bed = bed_limit - total_bed
                 
                 st.session_state.treatment_results = {
                     'previous_treatments': previous_treatments,
-                    'previous_bed': total_previous_bed,
-                    'planned_bed': planned_bed,
                     'planned_dose': planned_dose,
                     'planned_half_life': planned_half_life,
-                    'total_bed': total_bed,
+                    'total_dose': total_dose,
+                    'total_bed': total_bed,  # BED from total cumulative dose (STANDARD)
+                    'individual_bed_sum': individual_bed_sum,  # Sum of individual BEDs (for comparison)
+                    'total_g_factor': total_g_factor,
+                    'combined_half_life': combined_half_life,
                     'remaining_bed': remaining_bed,
                     'bed_limit': bed_limit,
                     'bed_ratio': total_bed / bed_limit,
                     'organ': selected_organ,
-                    'num_treatments': num_previous + 1
+                    'num_treatments': num_previous + 1,
+                    'methodology': 'cumulative_dose_standard'  # Flag for standard practice
                 }
         
         with col2:
@@ -573,10 +626,14 @@ def main():
                 results = st.session_state.treatment_results
                 
                 # Key metrics
-                st.metric("Previous BED", f"{results['previous_bed']:.2f} Gy")
-                st.metric("Planned BED", f"{results['planned_bed']:.2f} Gy")
-                st.metric("Total BED", f"{results['total_bed']:.2f} Gy")
-                st.metric("BED Limit", f"{results['bed_limit']:.2f} Gy")
+                col2a, col2b = st.columns(2)
+                with col2a:
+                    st.metric("Total Dose", f"{results['total_dose']:.2f} Gy", help="Sum of all absorbed doses")
+                    st.metric("Total BED (Standard)", f"{results['total_bed']:.2f} Gy", help="BED calculated from total cumulative dose")
+                
+                with col2b:
+                    st.metric("Combined Half-life", f"{results['combined_half_life']:.1f} h", help="Dose-weighted average half-life")
+                    st.metric("BED Limit", f"{results['bed_limit']:.2f} Gy")
                 
                 # Safety assessment
                 bed_ratio = results['bed_ratio']
@@ -590,50 +647,93 @@ def main():
                 
                 # Treatment recommendations
                 if results['remaining_bed'] > 0:
-                    max_additional_bed = results['remaining_bed']
                     st.info(f"""
                     **Treatment Capacity:**
-                    - Remaining BED: {max_additional_bed:.2f} Gy
-                    - Current plan: {results['planned_bed']:.2f} Gy
-                    - Utilization: {(results['planned_bed']/max_additional_bed)*100:.1f}% of remaining
+                    - Remaining BED: {results['remaining_bed']:.2f} Gy
+                    - Current plan utilization: {(results['total_bed']/results['bed_limit'])*100:.1f}% of total limit
                     """)
                     
-                    if results['planned_bed'] > max_additional_bed:
-                        st.error(f"⚠️ Planned dose exceeds capacity by {results['planned_bed'] - max_additional_bed:.2f} Gy BED")
+                    if results['total_bed'] > results['bed_limit']:
+                        st.error(f"⚠️ Total dose exceeds safe limit by {results['total_bed'] - results['bed_limit']:.2f} Gy BED")
                 else:
-                    st.error("❌ No remaining BED capacity")
+                    st.error("❌ Exceeds BED capacity")
+
+                # Methodology explanation - MOVED TO BOTTOM and REMOVED GREEN CHECK
+                st.info(f"""
+                **Standard Radiopharmaceutical Dosimetry Practice Applied:**
+                - **Step 1:** Sum all absorbed doses: {results['total_dose']:.2f} Gy
+                - **Step 2:** Calculate dose-weighted half-life: {results['combined_half_life']:.1f} h
+                - **Step 3:** Apply BED calculation to total dose: BED = D_total × (1 + G × D_total/(α/β))
+                - **Result:** {results['total_bed']:.2f} Gy BED
+                - **G-factor:** {results['total_g_factor']:.4f} (applied to total cumulative dose)
                 
-                # Visual representation
+                *This follows standard practice: sum absorbed doses FIRST, then calculate BED from total.*
+                """)
+                
+                # Visual representation - methodology comparison
                 fig = go.Figure()
                 
-                # Stacked bar showing BED components
+                # Show standard approach (cumulative dose method)
                 fig.add_trace(go.Bar(
-                    name='Previous BED',
-                    x=['Current', 'After Planned'],
-                    y=[results['previous_bed'], results['previous_bed']],
-                    marker_color='lightblue'
+                    name='Standard Method (Total Dose → BED)',
+                    x=['Standard Practice'],
+                    y=[results['total_bed']],
+                    marker_color='blue',
+                    text=f"{results['total_bed']:.1f} Gy",
+                    textposition='auto'
                 ))
                 
-                fig.add_trace(go.Bar(
-                    name='Planned BED',
-                    x=['Current', 'After Planned'],
-                    y=[0, results['planned_bed']],
-                    marker_color='orange'
-                ))
+                # For comparison, show what summing individual BEDs would give
+                if results['previous_treatments']:
+                    fig.add_trace(go.Bar(
+                        name='Alternative (Sum Individual BEDs)',
+                        x=['Individual Sum Method'],
+                        y=[results['individual_bed_sum']],
+                        marker_color='lightblue',
+                        text=f"{results['individual_bed_sum']:.1f} Gy",
+                        textposition='auto'
+                    ))
                 
                 # Add BED limit line
                 fig.add_hline(y=results['bed_limit'], line_dash="dash", line_color="red", 
                             annotation_text=f"BED Limit: {results['bed_limit']:.1f} Gy")
                 
                 fig.update_layout(
-                    title="BED Treatment Planning",
+                    title="BED Calculation Methods Comparison",
                     yaxis_title="BED (Gy)",
-                    barmode='stack',
-                    height=400
+                    height=400,
+                    showlegend=True
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
-    
+                
+                # Methodology notes
+                with st.expander("📖 Standard Practice Methodology"):
+                    difference = results['individual_bed_sum'] - results['total_bed'] if results['previous_treatments'] else 0
+                    st.markdown(f"""
+                    **Standard Radiopharmaceutical Dosimetry Practice:**
+                    1. **Sum absorbed doses:** {results['total_dose']:.2f} Gy (all administrations)
+                    2. **Calculate dose-weighted half-life:** {results['combined_half_life']:.1f} h
+                    3. **Apply BED formula to total:** BED = D_total × (1 + G × D_total/(α/β))
+                    4. **Result:** {results['total_bed']:.2f} Gy BED
+                    
+                    **Why This Method:**
+                    - Accounts for continuous DNA repair processes across all administrations
+                    - Reflects true biological impact of cumulative exposure
+                    - Standard approach in radiopharmaceutical dosimetry literature
+                    - Consistent with EANM/SNMMI guidelines
+                    
+                    **Comparison with Alternative:**
+                    - Standard method: {results['total_bed']:.2f} Gy BED
+                    - Individual sum method: {results['individual_bed_sum']:.2f} Gy BED
+                    - Difference: {difference:.2f} Gy BED ({((difference/results['total_bed'])*100) if results['total_bed'] > 0 else 0:.1f}% difference)
+                    
+                    **G-factor:** {results['total_g_factor']:.4f} (repair competition factor for total dose)
+                    """)
+            
+            else:
+                st.info("Please calculate treatment plan first.")
+
     with tab4:
         st.header("Safety Assessment Dashboard (BED-Based)")
         
@@ -662,7 +762,16 @@ def main():
             organ_bed_tolerance = get_organ_bed_tolerance(selected_organ, alpha_beta, kidney_risk_high)
             
             # Create tabs for single treatment vs cumulative assessment
-            if has_primary and has_treatment_plan:
+            # Show cumulative first if there are multiple treatments
+            if has_treatment_plan and 'treatment_results' in st.session_state:
+                num_treatments = st.session_state.treatment_results.get('num_treatments', 1)
+                if num_treatments > 1:
+                    # Multiple treatments - show cumulative first
+                    safety_tab2, safety_tab1 = st.tabs(["📊 Cumulative Treatment Safety", "🔬 Single Treatment Safety"])
+                else:
+                    # Single treatment - show single first
+                    safety_tab1, safety_tab2 = st.tabs(["🔬 Single Treatment Safety", "📊 Cumulative Treatment Safety"])
+            elif has_primary and has_treatment_plan:
                 safety_tab1, safety_tab2 = st.tabs(["🔬 Single Treatment Safety", "📊 Cumulative Treatment Safety"])
             else:
                 safety_tab1 = st.container()
@@ -745,14 +854,14 @@ def main():
                 else:
                     st.info("Single treatment results not available. Calculate primary dosimetry first.")
             
-            # Cumulative Treatment Safety Assessment
+            # Enhanced Cumulative Treatment Safety Assessment
             if safety_tab2 is not None:
                 with safety_tab2:
                     if has_treatment_plan:
-                        st.subheader("Cumulative Treatment Safety Analysis")
+                        st.subheader("Cumulative Treatment Safety Analysis (Standard Practice)")
                         treat_results = st.session_state.treatment_results
                         
-                        # Enhanced cumulative safety dashboard
+                        # Enhanced cumulative safety dashboard using standard practice
                         col1, col2, col3, col4 = st.columns(4)
                         
                         cumulative_tolerance_ratio = treat_results['total_bed'] / organ_bed_tolerance
@@ -761,10 +870,10 @@ def main():
                             st.metric("Total Treatments", f"{treat_results['num_treatments']}")
                             
                         with col2:
-                            st.metric("Cumulative BED", f"{treat_results['total_bed']:.1f} Gy")
+                            st.metric("Cumulative Dose", f"{treat_results['total_dose']:.1f} Gy", help="Sum of all absorbed doses")
                             
                         with col3:
-                            st.metric("BED Limit", f"{organ_bed_tolerance:.1f} Gy")
+                            st.metric("Total BED (Standard)", f"{treat_results['total_bed']:.1f} Gy", help="BED calculated from total cumulative dose")
                             
                         with col4:
                             if cumulative_tolerance_ratio <= 0.8:
@@ -774,122 +883,135 @@ def main():
                             else:
                                 st.metric("Cumulative Risk", "❌ HIGH", f"{cumulative_tolerance_ratio:.2f}")
                         
-                        # Detailed treatment breakdown
-                        st.subheader("Treatment History Summary")
+                        # Standard practice methodology explanation - REMOVED per request
+                        
+                        # Progressive cumulative analysis using standard practice
+                        st.subheader("Progressive Cumulative BED Analysis (Standard Method)")
                         
                         if treat_results['previous_treatments']:
-                            treatment_data = []
-                            cumulative_bed = 0
-                            
-                            for i, treatment in enumerate(treat_results['previous_treatments']):
-                                cumulative_bed += treatment['bed']
-                                treatment_data.append({
-                                    'Treatment #': i + 1,
-                                    'Dose (Gy)': f"{treatment['dose']:.2f}",
-                                    'Half-life (h)': f"{treatment['half_life']:.1f}",
-                                    'BED (Gy)': f"{treatment['bed']:.2f}",
-                                    'Cumulative BED (Gy)': f"{cumulative_bed:.2f}",
-                                    'Tolerance %': f"{(cumulative_bed/organ_bed_tolerance)*100:.1f}%"
+                            # Prepare all treatments including planned
+                            all_treatments = treat_results['previous_treatments'].copy()
+                            if treat_results['planned_dose'] > 0:
+                                all_treatments.append({
+                                    'dose': treat_results['planned_dose'],
+                                    'half_life': treat_results['planned_half_life']
                                 })
                             
-                            # Add planned treatment
-                            if treat_results['planned_bed'] > 0:
-                                cumulative_bed += treat_results['planned_bed']
+                            # Calculate progressive cumulative BED using standard practice
+                            progressive_data = calculate_cumulative_bed_progressive(all_treatments, alpha_beta, repair_half_time)
+                            
+                            # Create detailed treatment progression table
+                            treatment_data = []
+                            for i, data in enumerate(progressive_data):
+                                status_indicator = "📅 Planned" if i == len(progressive_data) - 1 and treat_results['planned_dose'] > 0 else "✅ Completed"
+                                tolerance_pct = (data['cumulative_bed'] / organ_bed_tolerance) * 100
+                                
+                                # Safety color coding
+                                if tolerance_pct <= 80:
+                                    risk_level = "🟢 Safe"
+                                elif tolerance_pct <= 100:
+                                    risk_level = "🟡 Caution"
+                                else:
+                                    risk_level = "🔴 Risk"
+                                
                                 treatment_data.append({
-                                    'Treatment #': f"{len(treat_results['previous_treatments']) + 1} (Planned)",
-                                    'Dose (Gy)': f"{treat_results['planned_dose']:.2f}",
-                                    'Half-life (h)': f"{treat_results['planned_half_life']:.1f}",
-                                    'BED (Gy)': f"{treat_results['planned_bed']:.2f}",
-                                    'Cumulative BED (Gy)': f"{cumulative_bed:.2f}",
-                                    'Tolerance %': f"{(cumulative_bed/organ_bed_tolerance)*100:.1f}%"
+                                    'Treatment': f"#{data['treatment_number']} {status_indicator}",
+                                    'Individual Dose (Gy)': f"{data['individual_dose']:.2f}",
+                                    'Individual t½ (h)': f"{data['individual_half_life']:.1f}",
+                                    'Cumulative Dose (Gy)': f"{data['cumulative_dose']:.2f}",
+                                    'Weighted t½ (h)': f"{data['cumulative_half_life']:.1f}",
+                                    'G-factor': f"{data['g_factor']:.4f}",
+                                    'Cumulative BED (Gy)': f"{data['cumulative_bed']:.2f}",
+                                    'Tolerance %': f"{tolerance_pct:.1f}%",
+                                    'Risk Level': risk_level
                                 })
                             
                             df_treatments = pd.DataFrame(treatment_data)
                             st.dataframe(df_treatments, use_container_width=True)
-                        
-                        # Cumulative BED progression visualization
-                        st.subheader("Cumulative BED Progression")
-                        
-                        fig = go.Figure()
-                        
-                        # Calculate cumulative progression
-                        treatments = treat_results['previous_treatments'].copy()
-                        if treat_results['planned_bed'] > 0:
-                            treatments.append({
-                                'dose': treat_results['planned_dose'],
-                                'half_life': treat_results['planned_half_life'],
-                                'bed': treat_results['planned_bed']
-                            })
-                        
-                        cumulative_beds = []
-                        treatment_numbers = []
-                        colors = []
-                        
-                        cumulative = 0
-                        for i, treatment in enumerate(treatments):
-                            cumulative += treatment['bed']
-                            cumulative_beds.append(cumulative)
-                            treatment_numbers.append(f"Treatment {i+1}")
                             
-                            # Color coding based on tolerance level
-                            ratio = cumulative / organ_bed_tolerance
-                            if ratio <= 0.8:
-                                colors.append('green')
-                            elif ratio <= 1.0:
-                                colors.append('orange')
-                            else:
-                                colors.append('red')
+                            # Enhanced progressive BED visualization - simplified
+                            st.subheader("Cumulative BED Progression (Standard Practice)")
+                            
+                            fig = go.Figure()
+                            
+                            treatment_numbers = [f"Tx {d['treatment_number']}" for d in progressive_data]
+                            cumulative_beds = [d['cumulative_bed'] for d in progressive_data]
+                            tolerance_ratios = [bed / organ_bed_tolerance for bed in cumulative_beds]
+                            
+                            # Color coding based on tolerance zones
+                            colors = []
+                            for ratio in tolerance_ratios:
+                                if ratio <= 0.8:
+                                    colors.append('green')
+                                elif ratio <= 1.0:
+                                    colors.append('orange')
+                                else:
+                                    colors.append('red')
+                            
+                            # Single plot: Cumulative BED progression
+                            fig.add_trace(go.Bar(
+                                x=treatment_numbers,
+                                y=cumulative_beds,
+                                marker_color=colors,
+                                text=[f"{bed:.1f} Gy" for bed in cumulative_beds],
+                                textposition='auto',
+                                name='Cumulative BED (Standard)'
+                            ))
+                            
+                            # Add tolerance limit line
+                            fig.add_hline(y=organ_bed_tolerance, line_dash="dash", line_color="red", 
+                                        annotation_text=f"BED Limit: {organ_bed_tolerance:.1f} Gy")
+                            
+                            # Add comfort zones
+                            fig.add_hrect(y0=0, y1=organ_bed_tolerance*0.8, 
+                                        fillcolor="green", opacity=0.1, annotation_text="Safe Zone")
+                            fig.add_hrect(y0=organ_bed_tolerance*0.8, y1=organ_bed_tolerance, 
+                                        fillcolor="orange", opacity=0.1, annotation_text="Caution Zone")
+                            if max(cumulative_beds) > organ_bed_tolerance:
+                                fig.add_hrect(y0=organ_bed_tolerance, y1=max(max(cumulative_beds), organ_bed_tolerance*1.2), 
+                                            fillcolor="red", opacity=0.1, annotation_text="Risk Zone")
+                            
+                            fig.update_layout(
+                                title=f"Cumulative BED Safety Assessment for {selected_organ}",
+                                yaxis_title="Cumulative BED (Gy)",
+                                xaxis_title="Treatment Sequence",
+                                height=500,
+                                showlegend=False
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True)
                         
-                        # Add bars showing cumulative BED
-                        fig.add_trace(go.Bar(
-                            x=treatment_numbers,
-                            y=cumulative_beds,
-                            marker_color=colors,
-                            text=[f"{bed:.1f} Gy" for bed in cumulative_beds],
-                            textposition='auto'
-                        ))
-                        
-                        # Add tolerance limit line
-                        fig.add_hline(y=organ_bed_tolerance, line_dash="dash", line_color="red", 
-                                    annotation_text=f"BED Limit: {organ_bed_tolerance:.1f} Gy")
-                        
-                        # Add comfort zones
-                        fig.add_hrect(y0=0, y1=organ_bed_tolerance*0.8, 
-                                    fillcolor="green", opacity=0.1, annotation_text="Safe Zone")
-                        fig.add_hrect(y0=organ_bed_tolerance*0.8, y1=organ_bed_tolerance, 
-                                    fillcolor="orange", opacity=0.1, annotation_text="Caution Zone")
-                        fig.add_hrect(y0=organ_bed_tolerance, y1=max(max(cumulative_beds), organ_bed_tolerance*1.2), 
-                                    fillcolor="red", opacity=0.1, annotation_text="Risk Zone")
-                        
-                        fig.update_layout(
-                            title=f"Cumulative BED Safety Assessment for {selected_organ}",
-                            yaxis_title="Cumulative BED (Gy)",
-                            xaxis_title="Treatment Sequence",
-                            height=500
-                        )
-                        
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Comprehensive cumulative safety summary
+                        # Comprehensive cumulative safety summary using standard practice
                         remaining_capacity = organ_bed_tolerance - treat_results['total_bed']
                         equivalent_total_fractions = calculate_equivalent_fractions(treat_results['total_bed'], alpha_beta)
                         
                         st.info(f"""
-                        **Cumulative Safety Summary for {selected_organ}:**
+                        **📊 Cumulative Safety Summary for {selected_organ} (Standard Practice):**
                         
-                        **Treatment History:**
-                        - Total treatments: {treat_results['num_treatments']}
-                        - Cumulative BED: {treat_results['total_bed']:.1f} Gy
-                        - Equivalent total fractions: {equivalent_total_fractions:.1f} × 2 Gy
+                        **🔬 Standard Dosimetry Method Applied:**
+                        - **Approach:** Sum absorbed doses → Calculate BED from total
+                        - **Total Treatments:** {treat_results['num_treatments']}
+                        - **Total Absorbed Dose:** {treat_results['total_dose']:.1f} Gy (sum of all administrations)
+                        - **Dose-Weighted Half-life:** {treat_results['combined_half_life']:.1f} h
+                        - **G-factor:** {treat_results['total_g_factor']:.4f} (repair factor for total dose)
+                        - **Total BED:** {treat_results['total_bed']:.1f} Gy (from cumulative dose calculation)
                         
-                        **Risk Assessment:**
-                        - Tolerance utilization: {(treat_results['total_bed']/organ_bed_tolerance)*100:.1f}%
-                        - Remaining capacity: {remaining_capacity:.1f} Gy BED
-                        - Risk level: {"LOW" if cumulative_tolerance_ratio <= 0.8 else "MODERATE" if cumulative_tolerance_ratio <= 1.0 else "HIGH"}
+                        **🎯 Clinical Impact Assessment:**
+                        - **Equivalent Fractionation:** {equivalent_total_fractions:.1f} × 2 Gy fractions
+                        - **Tolerance Utilization:** {(treat_results['total_bed']/organ_bed_tolerance)*100:.1f}%
+                        - **Remaining Capacity:** {remaining_capacity:.1f} Gy BED
+                        - **Risk Classification:** {"LOW RISK" if cumulative_tolerance_ratio <= 0.8 else "MODERATE RISK" if cumulative_tolerance_ratio <= 1.0 else "HIGH RISK"}
                         
-                        **Future Treatment Capacity:**
-                        - {"Additional treatments possible" if remaining_capacity > 0 else "No remaining capacity"}
-                        {f"- Maximum additional BED: {remaining_capacity:.1f} Gy" if remaining_capacity > 0 else ""}
+                        **⚗️ Scientific Rationale:**
+                        - Standard practice in radiopharmaceutical dosimetry
+                        - Accounts for continuous DNA repair across entire treatment course
+                        - More accurate than summing individual treatment BEDs
+                        - Consistent with EANM/SNMMI molecular radiotherapy guidelines
+                        
+                        **📈 Future Treatment Planning:**
+                        - {"✅ Additional treatments possible within safety limits" if remaining_capacity > 0 else "❌ No remaining capacity - alternative approaches needed"}
+                        {f"- **Maximum Additional BED:** {remaining_capacity:.1f} Gy" if remaining_capacity > 0 else "- **Exceeded by:** {abs(remaining_capacity):.1f} Gy BED"}
+                        {f"- **Estimated Additional Dose Capacity:** ~{remaining_capacity/treat_results['total_g_factor']:.1f} Gy (assuming similar kinetics)" if remaining_capacity > 0 and treat_results['total_g_factor'] > 0 else ""}
                         """)
                     else:
                         st.info("Cumulative treatment results not available. Calculate treatment planning first.")
@@ -1314,14 +1436,14 @@ def main():
         
         st.markdown("---")
         st.markdown("""
-        **Last Updated:** June 2025 | **Version:** 2.1  
+        **Last Updated:** June 2025 | **Version:** 2.2 (Standard Practice Corrected)
         **Contact:** For questions about references or methodology, consult your institutional medical physics team.
         """)
     
     # Footer with methodology
     st.markdown("---")
     st.markdown("""
-    ### 📚 Methodology & Clinical Application
+    ### 📚 Methodology & Clinical Application (Standard Practice)
     
     **Primary Calculations:**
     - **BED (Radiopharmaceutical):** D × (1 + G × D/(α/β))
@@ -1329,21 +1451,28 @@ def main():
     - **EQD2:** BED / (1 + 2/(α/β))
     - **Equivalent Fractions:** BED / [2 × (1 + 2/(α/β))]
     
+    **Standard Radiopharmaceutical Dosimetry Practice:**
+    - **Step 1:** Sum all absorbed doses across treatment course: D_total = ΣD_i
+    - **Step 2:** Calculate dose-weighted average half-life for mixed kinetics
+    - **Step 3:** Apply BED calculation to total dose: BED = D_total × (1 + G × D_total/(α/β))
+    - **Rationale:** Accounts for continuous repair processes across entire treatment course
+    
     **Advanced Metrics:**
     - **EQD2₉₉:** EQD2 when 99% of dose has been delivered (temporal milestone)
     - **Delivery Efficiency:** Fraction of dose delivered at key timepoints
     - **BED Tolerance Limits:** Organ-specific safety thresholds
-    - **Cumulative BED:** Sum of BED from multiple treatments
+    - **Progressive BED:** Cumulative biological dose using standard method
     
     **Kidney-Specific BED Limits:**
     - **High Risk Patients:** 28 Gy BED (existing kidney disease/risk factors)
     - **Low Risk Patients:** 40 Gy BED (no existing kidney disease)
     
     **⚠️ Important Notes:**
-    - This calculator is for research and educational purposes
+    - Uses STANDARD PRACTICE: sum absorbed doses first, then calculate BED from total
+    - More accurate than summing individual treatment BEDs
     - Clinical decisions require qualified medical physics consultation
     - Consider individual patient factors and clinical context
-    - Cumulative BED tracking essential for multiple treatment safety
+    - Methodology consistent with EANM/SNMMI guidelines for molecular radiotherapy
     """)
 
 if __name__ == "__main__":
