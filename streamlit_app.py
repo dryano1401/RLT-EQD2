@@ -174,6 +174,18 @@ def calculate_delivery_efficiency(dose, effective_half_life):
 
     return efficiency
 
+def calculate_dose_rate_metrics(dose, effective_half_life, time_99, dose_99):
+    """
+    Calculate average dose rate over the 0-99% delivery window and the
+    initial (peak) instantaneous dose rate at t=0.
+    Average rate = Dose_99 / Time_99 (mean rate needed to deliver 99% of dose by time_99)
+    Initial rate = D0 * lambda_eff (instantaneous rate at t=0, highest point of the exponential decay)
+    """
+    lambda_eff = 0.693 / effective_half_life
+    average_dose_rate = dose_99 / time_99          # Gy/h
+    initial_dose_rate = dose * lambda_eff           # Gy/h
+    return average_dose_rate, initial_dose_rate
+
 def calculate_dose_rate_factor(effective_half_life, repair_half_time):
     """
     Calculate dose rate factor for different half-lives
@@ -413,12 +425,31 @@ def main():
             # Calculate delivery efficiency
             delivery_eff = calculate_delivery_efficiency(results['organ_dose'], results['effective_half_life'])
 
+            # Calculate dose rate metrics
+            average_dose_rate, initial_dose_rate = calculate_dose_rate_metrics(
+                results['organ_dose'], results['effective_half_life'], time_99, dose_99
+            )
+
             col1, col2 = st.columns(2)
 
             with col1:
                 st.subheader("Temporal Delivery Metrics")
 
                 st.metric("EQD2₉₉", f"{eqd299:.2f} Gy", help="EQD2 when 99% of dose has been delivered")
+
+                rate_col1, rate_col2 = st.columns(2)
+                with rate_col1:
+                    st.metric(
+                        "Avg Dose Rate (0-99%)",
+                        f"{average_dose_rate * 1000:.1f} mGy/h",
+                        help="Mean rate needed to deliver 99% of the dose by Time to 99%: Dose₉₉ / Time₉₉"
+                    )
+                with rate_col2:
+                    st.metric(
+                        "Initial Dose Rate (t=0)",
+                        f"{initial_dose_rate * 1000:.1f} mGy/h",
+                        help="Peak instantaneous dose rate right after administration: D₀ × λ_eff"
+                    )
 
                 st.write("**Key Timepoints:**")
                 st.write(f"• Time to 99%: {time_99:.1f} hours ({time_99/24:.1f} days)")
@@ -530,20 +561,25 @@ def main():
             st.subheader("Comprehensive Analysis")
 
             analysis_data = {
-                'Metric': ['Total Organ Dose', 'BED', 'EQD2', 'EQD2₉₉', 'Equivalent Fractions'],
+                'Metric': ['Total Organ Dose', 'BED', 'EQD2', 'EQD2₉₉', 'Equivalent Fractions',
+                           'Avg Dose Rate (0-99%)', 'Initial Dose Rate (t=0)'],
                 'Value': [
                     f"{results['organ_dose']:.2f} Gy",
                     f"{results['bed']:.2f} Gy",
                     f"{results['eqd2']:.2f} Gy",
                     f"{eqd299:.2f} Gy",
-                    f"{results['equivalent_fractions']:.1f} fractions"
+                    f"{results['equivalent_fractions']:.1f} fractions",
+                    f"{average_dose_rate * 1000:.1f} mGy/h",
+                    f"{initial_dose_rate * 1000:.1f} mGy/h"
                 ],
                 'Clinical Interpretation': [
                     'Physical dose absorbed by organ',
                     'Biological effectiveness accounting for repair',
                     'Equivalent conventional fractionation dose',
                     'Biological effect at 99% delivery milestone',
-                    'Number of 2 Gy fractions with same biological effect'
+                    'Number of 2 Gy fractions with same biological effect',
+                    'Mean rate to deliver 99% of dose by Time to 99%',
+                    'Peak instantaneous rate right after administration'
                 ]
             }
 
