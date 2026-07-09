@@ -274,6 +274,25 @@ def main():
         st.sidebar.write(f"α/β ratio: {alpha_beta} Gy")
         st.sidebar.write(f"Repair t₁/₂: {repair_half_time} h")
 
+    # Kidney risk status is used by both Treatment Planning and Safety Assessment,
+    # so it lives once in the sidebar instead of two independent controls that could disagree.
+    kidney_risk_high = False
+    kidney_bed_limit = 40.0
+    if selected_organ == "Kidneys":
+        st.sidebar.subheader("⚕️ Kidney Risk Status")
+        kidney_risk_choice = st.sidebar.radio(
+            "Patient kidney risk status:",
+            ["Low risk (no existing kidney disease)", "High risk (existing kidney disease/risk factors)"],
+            help="Determines the BED tolerance limit used across Treatment Planning and Safety Assessment.",
+            key="kidney_risk_status"
+        )
+        kidney_risk_high = "High risk" in kidney_risk_choice
+        kidney_bed_limit = 28.0 if kidney_risk_high else 40.0
+        if kidney_risk_high:
+            st.sidebar.warning(f"🟡 High Risk: BED limit = {kidney_bed_limit} Gy")
+        else:
+            st.sidebar.info(f"🟢 Low Risk: BED limit = {kidney_bed_limit} Gy")
+
     # Main tabs
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🧮 Primary Calculation",
@@ -342,6 +361,15 @@ def main():
             if 'primary_results' in st.session_state:
                 results = st.session_state.primary_results
 
+                is_stale = (
+                    results['organ'] != selected_organ
+                    or abs(results['organ_dose'] - organ_dose) > 1e-9
+                    or abs(results['effective_half_life'] - organ_effective_half_life) > 1e-9
+                    or abs(results['alpha_beta'] - alpha_beta) > 1e-9
+                )
+                if is_stale:
+                    st.warning("⚠️ Inputs have changed since these results were calculated. Click **Calculate Primary Dosimetry** to refresh.")
+
                 # Key metrics
                 col2a, col2b = st.columns(2)
                 with col2a:
@@ -369,6 +397,14 @@ def main():
 
         if 'primary_results' in st.session_state:
             results = st.session_state.primary_results
+
+            if (
+                results['organ'] != selected_organ
+                or abs(results['organ_dose'] - organ_dose) > 1e-9
+                or abs(results['effective_half_life'] - organ_effective_half_life) > 1e-9
+                or abs(results['alpha_beta'] - alpha_beta) > 1e-9
+            ):
+                st.warning("⚠️ Inputs on the Primary Calculation tab have changed since these results were calculated. Go recalculate there to refresh this analysis.")
 
             # Calculate advanced metrics
             eqd299, time_99, dose_99 = calculate_eqd299(results['organ_dose'], results['alpha_beta'],
@@ -522,21 +558,8 @@ def main():
 
         st.markdown("Plan treatments using cumulative BED tracking with organ-specific limits")
 
-        # Kidney risk assessment for dose limits
         if selected_organ == "Kidneys":
-            st.subheader("Kidney Risk Assessment")
-            kidney_risk = st.radio(
-                "Patient kidney risk status:",
-                ["Low risk (no existing kidney disease)", "High risk (existing kidney disease/risk factors)"],
-                help="Select patient's kidney risk status to determine appropriate BED limit"
-            )
-
-            if "Low risk" in kidney_risk:
-                kidney_bed_limit = 40.0  # Gy BED
-                st.info(f"🟢 **Low Risk Patient**: BED limit = {kidney_bed_limit} Gy")
-            else:
-                kidney_bed_limit = 28.0  # Gy BED
-                st.warning(f"🟡 **High Risk Patient**: BED limit = {kidney_bed_limit} Gy")
+            st.caption(f"⚕️ Using kidney risk status from the sidebar — BED limit = {kidney_bed_limit:.1f} Gy")
 
         col1, col2 = st.columns(2)
 
@@ -548,16 +571,15 @@ def main():
             previous_treatments = []
 
             for i in range(num_previous):
-                st.write(f"**Treatment {i+1}:**")
-                prev_dose = st.number_input(f"Dose {i+1} (Gy):", min_value=0.0, value=5.0, step=0.1, key=f"prev_dose_{i}")
-                prev_half_life = st.number_input(f"Half-life {i+1} (h):", min_value=0.1, value=67.0, step=0.1, key=f"prev_hl_{i}")
+                with st.container(border=True):
+                    st.write(f"**Treatment {i+1}**")
+                    prev_dose = st.number_input(f"Dose {i+1} (Gy):", min_value=0.0, value=5.0, step=0.1, key=f"prev_dose_{i}")
+                    prev_half_life = st.number_input(f"Half-life {i+1} (h):", min_value=0.1, value=67.0, step=0.1, key=f"prev_hl_{i}")
 
                 previous_treatments.append({
                     'dose': prev_dose,
                     'half_life': prev_half_life
                 })
-
-                st.write(f"   • Dose: {prev_dose:.2f} Gy")
 
             st.subheader("Planned Treatment")
             planned_dose = st.number_input("Planned dose (Gy):", min_value=0.0, value=10.0, step=0.1)
@@ -630,6 +652,17 @@ def main():
             if 'treatment_results' in st.session_state:
                 results = st.session_state.treatment_results
 
+                is_stale = (
+                    results['organ'] != selected_organ
+                    or results['num_treatments'] != num_previous + 1
+                    or results['planned_dose'] != planned_dose
+                    or results['planned_half_life'] != planned_half_life
+                    or results['previous_treatments'] != previous_treatments
+                    or (selected_organ == "Kidneys" and results['bed_limit'] != kidney_bed_limit)
+                )
+                if is_stale:
+                    st.warning("⚠️ Inputs have changed since this plan was calculated. Click **Calculate Treatment Plan** to refresh.")
+
                 # Key metrics
                 col2a, col2b = st.columns(2)
                 with col2a:
@@ -681,50 +714,54 @@ def main():
                     })
                 st.dataframe(pd.DataFrame(tx_rows), use_container_width=True)
 
-                # Visual representation - methodology comparison
-                fig = go.Figure()
+                # Methodology comparison is only meaningful once there's more than one administration
+                # to fractionate - with a single treatment, ΣBED and the total-dose method are identical.
+                if results['num_treatments'] > 1:
+                    fig = go.Figure()
 
-                fig.add_trace(go.Bar(
-                    name='Correct (Σ BED per administration)',
-                    x=['ΣBED'],
-                    y=[results['total_bed']],
-                    marker_color='blue',
-                    text=f"{results['total_bed']:.1f} Gy",
-                    textposition='auto'
-                ))
+                    fig.add_trace(go.Bar(
+                        name='Correct (Σ BED per administration)',
+                        x=['ΣBED'],
+                        y=[results['total_bed']],
+                        marker_color='blue',
+                        text=f"{results['total_bed']:.1f} Gy",
+                        textposition='auto'
+                    ))
 
-                fig.add_trace(go.Bar(
-                    name='Comparison only (Total dose → BED)',
-                    x=['Total-dose method'],
-                    y=[results['total_bed_totaldose_method']],
-                    marker_color='lightblue',
-                    text=f"{results['total_bed_totaldose_method']:.1f} Gy",
-                    textposition='auto'
-                ))
+                    fig.add_trace(go.Bar(
+                        name='Comparison only (Total dose → BED)',
+                        x=['Total-dose method'],
+                        y=[results['total_bed_totaldose_method']],
+                        marker_color='lightblue',
+                        text=f"{results['total_bed_totaldose_method']:.1f} Gy",
+                        textposition='auto'
+                    ))
 
-                fig.add_hline(y=results['bed_limit'], line_dash="dash", line_color="red",
-                            annotation_text=f"BED Limit: {results['bed_limit']:.1f} Gy")
+                    fig.add_hline(y=results['bed_limit'], line_dash="dash", line_color="red",
+                                annotation_text=f"BED Limit: {results['bed_limit']:.1f} Gy")
 
-                fig.update_layout(
-                    title="Cumulative BED Method Comparison",
-                    yaxis_title="BED (Gy)",
-                    height=400,
-                    showlegend=True
-                )
+                    fig.update_layout(
+                        title="Cumulative BED Method Comparison",
+                        yaxis_title="BED (Gy)",
+                        height=400,
+                        showlegend=True
+                    )
 
-                st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True)
 
-                with st.expander("📖 Methodology notes"):
-                    delta = results['total_bed_totaldose_method'] - results['total_bed']
-                    st.markdown(f"""
-                    **ΣBED method (used for planning):**
-                    - \(BED_{{cum}} = \\sum_i D_i\\left(1 + \\frac{{G_i D_i}}{{\\alpha/\\beta}}\\right)\)
+                    with st.expander("📖 Methodology notes"):
+                        delta = results['total_bed_totaldose_method'] - results['total_bed']
+                        st.markdown(f"""
+                        **ΣBED method (used for planning):**
+                        - \(BED_{{cum}} = \\sum_i D_i\\left(1 + \\frac{{G_i D_i}}{{\\alpha/\\beta}}\\right)\)
 
-                    **Total-dose method (comparison only):**
-                    - Computes \(BED(D_{{total}}, Teff_{{weighted}})\) and tends to overstate quadratic effect vs fractionation.
+                        **Total-dose method (comparison only):**
+                        - Computes \(BED(D_{{total}}, Teff_{{weighted}})\) and tends to overstate quadratic effect vs fractionation.
 
-                    **Delta (Total-dose - ΣBED):** {delta:.2f} Gy BED
-                    """)
+                        **Delta (Total-dose - ΣBED):** {delta:.2f} Gy BED
+                        """)
+                else:
+                    st.caption("ℹ️ Method comparison appears once previous treatments are added — with a single administration, ΣBED and the total-dose method give the same result.")
 
             else:
                 st.info("Please calculate treatment plan first.")
@@ -737,22 +774,9 @@ def main():
         has_treatment_plan = 'treatment_results' in st.session_state
 
         if has_primary or has_treatment_plan:
-            # Get organ tolerance limit
-            kidney_risk_high = False
+            # Kidney risk status (if applicable) comes from the sidebar - single source of truth.
             if selected_organ == "Kidneys":
-                st.subheader("Kidney Risk Assessment")
-                kidney_risk = st.radio(
-                    "Patient kidney risk status:",
-                    ["Low risk (no existing kidney disease)", "High risk (existing kidney disease/risk factors)"],
-                    help="Select patient's kidney risk status to determine appropriate BED limit",
-                    key="safety_kidney_risk"
-                )
-                kidney_risk_high = "High risk" in kidney_risk
-
-                if not kidney_risk_high:
-                    st.info(f"🟢 **Low Risk Patient**: BED limit = 40.0 Gy")
-                else:
-                    st.warning(f"🟡 **High Risk Patient**: BED limit = 28.0 Gy")
+                st.caption(f"⚕️ Using kidney risk status from the sidebar — BED limit = {kidney_bed_limit:.1f} Gy")
 
             organ_bed_tolerance = get_organ_bed_tolerance(selected_organ, alpha_beta, kidney_risk_high)
 
@@ -794,18 +818,18 @@ def main():
                         st.metric("Current BED", f"{results['bed']:.1f} Gy")
 
                     with col2:
-                        st.metric("BED₉₉", f"{bed_99_actual:.1f} Gy", f"At {time_99:.0f}h")
+                        st.metric("BED₉₉", f"{bed_99_actual:.1f} Gy", f"At {time_99:.0f}h", delta_color="off")
 
                     with col3:
-                        st.metric("Equivalent Fractions", f"{results['equivalent_fractions']:.1f}", f"2 Gy fractions")
+                        st.metric("Equivalent Fractions", f"{results['equivalent_fractions']:.1f}", f"2 Gy fractions", delta_color="off")
 
                     with col4:
                         if tolerance_ratio <= 0.8:
-                            st.metric("Tolerance Status", "✅ LOW", f"{tolerance_ratio:.2f}")
+                            st.metric("Tolerance Status", "✅ LOW", f"Ratio {tolerance_ratio:.2f}", delta_color="off")
                         elif tolerance_ratio <= 1.0:
-                            st.metric("Tolerance Status", "⚠️ MODERATE", f"{tolerance_ratio:.2f}")
+                            st.metric("Tolerance Status", "⚠️ MODERATE", f"Ratio {tolerance_ratio:.2f}", delta_color="off")
                         else:
-                            st.metric("Tolerance Status", "❌ HIGH", f"{tolerance_ratio:.2f}")
+                            st.metric("Tolerance Status", "❌ HIGH", f"Ratio {tolerance_ratio:.2f}", delta_color="off")
 
                     # Visual safety assessment
                     fig = go.Figure()
@@ -872,11 +896,11 @@ def main():
 
                         with col4:
                             if cumulative_tolerance_ratio <= 0.8:
-                                st.metric("Cumulative Risk", "✅ LOW", f"{cumulative_tolerance_ratio:.2f}")
+                                st.metric("Cumulative Risk", "✅ LOW", f"Ratio {cumulative_tolerance_ratio:.2f}", delta_color="off")
                             elif cumulative_tolerance_ratio <= 1.0:
-                                st.metric("Cumulative Risk", "⚠️ MODERATE", f"{cumulative_tolerance_ratio:.2f}")
+                                st.metric("Cumulative Risk", "⚠️ MODERATE", f"Ratio {cumulative_tolerance_ratio:.2f}", delta_color="off")
                             else:
-                                st.metric("Cumulative Risk", "❌ HIGH", f"{cumulative_tolerance_ratio:.2f}")
+                                st.metric("Cumulative Risk", "❌ HIGH", f"Ratio {cumulative_tolerance_ratio:.2f}", delta_color="off")
 
                         # Progressive cumulative analysis using ΣBED
                         st.subheader("Progressive Cumulative BED Analysis (Σ BED method)")
@@ -1094,7 +1118,8 @@ def main():
             ]
 
             df_alpha_beta = pd.DataFrame(alpha_beta_refs)
-            st.dataframe(df_alpha_beta, use_container_width=True)
+            # st.table (not st.dataframe) so long citations wrap instead of being clipped by a fixed-height grid
+            st.table(df_alpha_beta.set_index('Organ'))
 
             st.info("""
             **Evidence Levels:**
@@ -1214,7 +1239,7 @@ def main():
             ]
 
             df_repair = pd.DataFrame(repair_refs)
-            st.dataframe(df_repair, use_container_width=True)
+            st.table(df_repair.set_index('Organ'))
 
             with st.expander("🔍 Repair Kinetics Methodology"):
                 st.markdown("""
@@ -1404,31 +1429,31 @@ def main():
         **Contact:** For questions about references or methodology, consult your institutional medical physics team.
         """)
 
-    # Footer with methodology
+    # Footer with methodology - collapsed by default so it doesn't add ~40 lines of
+    # scroll under every single tab; still one click away wherever the user is.
     st.markdown("---")
-    st.markdown("""
-    ### 📚 Methodology & Clinical Application (Updated BED Summation for Fractionated PRRT)
+    with st.expander("📚 Methodology & Clinical Application Reference"):
+        st.markdown("""
+        **Primary Calculations:**
+        - **BED (Radiopharmaceutical):** D × (1 + G × D/(α/β))
+        - **G-factor:** λ_eff/(λ_eff + μ_repair) where λ_eff = ln(2)/T_eff, μ_repair = ln(2)/T_repair
+        - **EQD2:** BED / (1 + 2/(α/β))
+        - **Equivalent Fractions:** BED / [2 × (1 + 2/(α/β))]
 
-    **Primary Calculations:**
-    - **BED (Radiopharmaceutical):** D × (1 + G × D/(α/β))
-    - **G-factor:** λ_eff/(λ_eff + μ_repair) where λ_eff = ln(2)/T_eff, μ_repair = ln(2)/T_repair
-    - **EQD2:** BED / (1 + 2/(α/β))
-    - **Equivalent Fractions:** BED / [2 × (1 + 2/(α/β))]
+        **Cumulative BED for Fractionated PRRT (Treatment Planning & Safety):**
+        - **Compute BED per administration (using that administration’s Teff)**
+        - **Sum BEDs:** BED_total = Σ BED_i
+        - **Rationale:** Repair half-times are hours; cycle spacing is weeks → near-complete repair between cycles.
 
-    **Cumulative BED for Fractionated PRRT (Treatment Planning & Safety):**
-    - **Compute BED per administration (using that administration’s Teff)**
-    - **Sum BEDs:** BED_total = Σ BED_i
-    - **Rationale:** Repair half-times are hours; cycle spacing is weeks → near-complete repair between cycles.
+        **Kidney-Specific BED Limits:**
+        - **High Risk Patients:** 28 Gy BED (existing kidney disease/risk factors)
+        - **Low Risk Patients:** 40 Gy BED (no existing kidney disease)
 
-    **Kidney-Specific BED Limits:**
-    - **High Risk Patients:** 28 Gy BED (existing kidney disease/risk factors)
-    - **Low Risk Patients:** 40 Gy BED (no existing kidney disease)
-
-    **⚠️ Important Notes:**
-    - Treatment Planning tab now uses ΣBED per administration (fractionated PRRT-correct)
-    - The “total dose → BED” method is shown only as an internal comparison (and is not used for safety decisions)
-    - Clinical decisions require qualified medical physics consultation
-    """)
+        **⚠️ Important Notes:**
+        - Treatment Planning tab uses ΣBED per administration (fractionated PRRT-correct)
+        - The “total dose → BED” method is shown only as an internal comparison (and is not used for safety decisions)
+        - Clinical decisions require qualified medical physics consultation
+        """)
 
 if __name__ == "__main__":
     main()
