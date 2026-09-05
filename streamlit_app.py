@@ -250,8 +250,8 @@ def main():
     )
 
     st.title("⚛️ Radiopharmaceutical Dosimetry Calculator")
-    st.markdown("Clinical calculator for BED, EQD2, and delivery analysis in radiopharmaceutical therapy")
-
+    st.markdown("Calculator for BED, EQD2, and delivery analysis in radiopharmaceutical therapy")
+    st.markdown("This tool is for research and educational purposes.")
     # Sidebar for organ selection
     st.sidebar.header("🎯 Organ Selection")
 
